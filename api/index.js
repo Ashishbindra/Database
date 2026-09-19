@@ -6651,6 +6651,20 @@ app.post(["/api/vault/register", "/vault/register", "/register"], rateLimiter(10
     const usernameHash = crypto2.createHash("sha256").update(username.trim().toLowerCase()).digest("hex");
     const indexFilePath = `data/users_index/${usernameHash}.json`;
     const userFilePath = `data/users/${opaqueUserId}/account/auth-config.json`;
+    try {
+      await githubStorageGet(indexFilePath);
+      return res.status(409).json({ error: "Duplicate User", message: "Username already exists." });
+    } catch (err) {
+      if (err.status === 401 || err.status === 403) {
+        return res.status(err.status).json({ error: "GitHub Storage Error", message: err.message });
+      }
+      if (err.status === 404 || err.message === "File not found") {
+      } else if (err.status) {
+        return res.status(err.status).json({ error: "GitHub Storage Error", message: err.message });
+      } else {
+        throw err;
+      }
+    }
     console.log(`[REGISTER_START] User: ${usernameHash.substring(0, 8)}...`);
     await githubStoragePut(
       indexFilePath,

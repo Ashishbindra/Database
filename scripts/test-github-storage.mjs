@@ -65,6 +65,44 @@ async function runTests() {
     assert.equal(resQuery.status, 401);
     console.log("✓ Test 5 Passed");
 
+    // 6. Test Registration with Empty Repository (404 absent -> registration succeeds)
+    console.log("Test 6: Empty repository registration (404 absent -> success)...");
+    process.env.GITHUB_STORAGE_PAT = "";
+    const uniqueUser = `newuser_${Date.now()}`;
+    const resReg1 = await fetch(`${baseUrl}/api/vault/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: uniqueUser,
+        opaqueUserId: `user_id_${Date.now()}`,
+        saltHex: "123456",
+        authProofHash: "abcdef",
+        wrappedDek: "encrypted_dek_xyz",
+      }),
+    });
+    assert.equal(resReg1.status, 200);
+    const jsonReg1 = await resReg1.json();
+    assert.equal(jsonReg1.success, true);
+    console.log("✓ Test 6 Passed");
+
+    // 7. Test Duplicate Registration (existing index file -> 409 Duplicate User)
+    console.log("Test 7: Duplicate username registration (existing index -> 409)...");
+    const resReg2 = await fetch(`${baseUrl}/api/vault/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: uniqueUser,
+        opaqueUserId: `user_id_diff_${Date.now()}`,
+        saltHex: "654321",
+        authProofHash: "fedcba",
+        wrappedDek: "encrypted_dek_abc",
+      }),
+    });
+    assert.equal(resReg2.status, 409);
+    const jsonReg2 = await resReg2.json();
+    assert.equal(jsonReg2.error, "Duplicate User");
+    console.log("✓ Test 7 Passed");
+
     console.log("==================================================");
     console.log("All GitHub Storage & Routing Test Cases PASSED successfully!");
     console.log("==================================================");
