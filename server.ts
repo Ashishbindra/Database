@@ -34,9 +34,21 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  
+  const host = req.headers.host || "";
+  const isDev = 
+    process.env.NODE_ENV !== "production" || 
+    host.includes("localhost") || 
+    host.includes("127.0.0.1") || 
+    host.includes("ais-dev");
+
+  const connectSrc = isDev
+    ? "connect-src 'self' https://api.github.com ws://127.0.0.1:24678 ws://localhost:24678;"
+    : "connect-src 'self' https://api.github.com;";
+
   res.setHeader(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' https://api.github.com;"
+    `default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; ${connectSrc}`
   );
   next();
 });
@@ -121,6 +133,7 @@ async function requireAuth(req: Request, res: Response, next: NextFunction) {
       return res.status(401).json({ error: "Unauthorized", message: "Invalid or expired session token." });
     }
     (req as any).session = session;
+    (req as any).user = session;
     next();
   } catch (err: any) {
     if (err.message && err.message.includes("DISTRIBUTED_SESSION_STORE_UNAVAILABLE")) {
@@ -687,6 +700,129 @@ app.delete("/api/vault/account", requireAuth, async (req: Request, res: Response
   }
 });
 
+// 9.5. GET /api/vault/tree & GET /api/vault/file (Secure Proxies for GitHub Storage Tree Listing)
+app.get("/api/vault/tree", requireAuth, async (req: Request, res: Response) => {
+  const session = (req as any).session;
+  const username = session ? session.opaqueUserId : "anonymous";
+
+  const owner = GITHUB_OWNER;
+  const repo = GITHUB_REPO;
+  const branch = GITHUB_BRANCH;
+
+  console.log("[TREE API] GET /api/vault/tree");
+  console.log("[TREE API] authenticated:", !!(req as any).user);
+  console.log("[TREE API] owner:", owner);
+  console.log("[TREE API] repo:", repo);
+  console.log("[TREE API] branch:", branch);
+
+  if (!GITHUB_PAT) {
+    // Return mock tree listing based on active local simulation
+    const localKeys = Array.from(serverLocalVault.keys());
+    const mockTree = localKeys.map((k) => ({
+      path: k,
+      sha: "local_sha",
+      type: "blob",
+      updatedAt: new Date().toISOString(),
+    }));
+    return res.json({ tree: mockTree, files: mockTree });
+  }
+
+  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/git/trees/${GITHUB_BRANCH}?recursive=1`;
+
+  // Temporary server-side diagnostic logging as requested
+  console.log("--- GitHub API Tree Request ---");
+  console.log(`Request Path: ${req.path}`);
+  console.log(`Authenticated User: ${username}`);
+  console.log(`GitHub API URL: ${url}`);
+  console.log(`Repository Owner: ${GITHUB_OWNER}`);
+  console.log(`Repository Name: ${GITHUB_REPO}`);
+  console.log(`Branch: ${GITHUB_BRANCH}`);
+
+  try {
+    const gitRes = await fetch(url, {
+      headers: {
+        Authorization: `token ${GITHUB_PAT}`,
+        Accept: "application/vnd.github.v3+json",
+        "User-Agent": "EncryptedVaultSDK-Server",
+      },
+    });
+
+    console.log(`GitHub response status: ${gitRes.status}`);
+
+    if (!gitRes.ok) {
+      const errJson = await gitRes.json().catch(() => ({}));
+      const errMsg = errJson.message || gitRes.statusText;
+      console.error(`GitHub API Request failed: HTTP ${gitRes.status}`);
+      console.error(`GitHub response body for error:`, JSON.stringify(errJson));
+      return res.status(gitRes.status).json({
+        error: "GitHub API Error",
+        message: `Failed to fetch tree from GitHub: ${errMsg}`,
+      });
+    }
+
+    const data = await gitRes.json();
+    const rawTree = data.tree || [];
+
+    console.log(`Response item/file count: ${rawTree.length}`);
+    console.log("-------------------------------");
+
+    // Filter to only include files and directories under data/users/ and data/users_index/
+    const filteredTree = rawTree
+      .filter((item: any) => {
+        return (
+          item.path.startsWith("data/users/") ||
+          item.path.startsWith("data/users_index/") ||
+          item.path === "data/users" ||
+          item.path === "data/users_index"
+        );
+      })
+      .map((item: any) => ({
+        path: item.path,
+        sha: item.sha,
+        type: item.type === "tree" ? "tree" : "blob",
+        updatedAt: new Date().toISOString(),
+      }));
+
+    return res.json({ tree: filteredTree, files: filteredTree });
+  } catch (err: any) {
+    console.error("Exception during GitHub API tree fetch:", err);
+    return res.status(500).json({
+      error: "GitHub API Error",
+      message: err.message || "Internal server error while retrieving repository tree.",
+    });
+  }
+});
+
+app.get("/api/vault/file", requireAuth, async (req: Request, res: Response) => {
+  const filePath = req.query.path as string;
+  if (!filePath) {
+    return res.status(400).json({ error: "Invalid Request", message: "Path parameter is required." });
+  }
+
+  // Prevent path traversal attacks
+  if (!filePath.startsWith("data/users/") && !filePath.startsWith("data/users_index/")) {
+    return res.status(403).json({ error: "Access Denied", message: "Unauthorized file path access." });
+  }
+
+  try {
+    if (GITHUB_PAT) {
+      const { content, sha } = await githubStorageGet(filePath);
+      return res.json({ content, sha });
+    } else {
+      const entry = serverLocalVault.get(filePath);
+      if (!entry) {
+        return res.status(404).json({ error: "Not Found", message: "File not found locally." });
+      }
+      return res.json({ content: entry.content, sha: entry.sha });
+    }
+  } catch (err: any) {
+    return res.status(err.status || 500).json({
+      error: "Read Failed",
+      message: err.message || "Failed to retrieve remote file content.",
+    });
+  }
+});
+
 // 10. POST /api/testing/run
 app.post("/api/testing/run", async (req: Request, res: Response) => {
   try {
@@ -700,6 +836,14 @@ app.post("/api/testing/run", async (req: Request, res: Response) => {
 
 // Start Express + Vite Dev or Production Server
 async function startServer() {
+  // Guarantee that any unhandled /api/* requests never fall through to index.html/Vite middlewares
+  app.all("/api/*", (req: Request, res: Response) => {
+    return res.status(404).json({
+      error: "Not Found",
+      message: `API endpoint ${req.method} ${req.path} not found.`
+    });
+  });
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },

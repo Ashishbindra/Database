@@ -100,9 +100,48 @@ export class GitHubStorageClient {
       const mockFile = await GitHubMockRemote.getFile(path);
       return mockFile ? { content: mockFile.content, sha: mockFile.sha } : null;
     }
-    const appId = path.split("/").pop()?.replace(".json", "") || "default";
-    const result = await this.getState(appId);
-    return result ? { content: JSON.stringify(result.state), sha: result.sha || "1" } : null;
+
+    const token = this.sessionTokenSupplier ? this.sessionTokenSupplier() : null;
+    if (!token) return null;
+
+    try {
+      const res = await fetch(`/api/vault/file?path=${encodeURIComponent(path)}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const status = res.status;
+      const contentType = res.headers.get("Content-Type") || "";
+      const responseText = await res.text();
+
+      if (!res.ok) {
+        if (contentType.includes("application/json")) {
+          try {
+            const errJson = JSON.parse(responseText);
+            console.error(`GetFile API error:`, errJson);
+          } catch {}
+        } else {
+          console.error(`GetFile HTTP Error ${status} (${contentType}): ${responseText.substring(0, 300)}`);
+        }
+        return null;
+      }
+
+      if (!contentType.includes("application/json")) {
+        console.error(`Invalid GetFile response format (expected JSON, got ${contentType}): ${responseText.substring(0, 300)}`);
+        return null;
+      }
+
+      try {
+        return JSON.parse(responseText);
+      } catch (err: any) {
+        console.error(`Failed to parse file response JSON: ${err.message}`);
+        return null;
+      }
+    } catch (err) {
+      console.error("Exception during getFile fetch:", err);
+      return null;
+    }
   }
 
   // Legacy putFile fallback compatibility
@@ -121,6 +160,41 @@ export class GitHubStorageClient {
     if (this.config.mode === "MOCK") {
       return await GitHubMockRemote.listFiles(directoryPath);
     }
-    return [];
+
+    const token = this.sessionTokenSupplier ? this.sessionTokenSupplier() : null;
+    if (!token) return [];
+
+    const res = await fetch(`/api/vault/tree`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const status = res.status;
+    const contentType = res.headers.get("Content-Type") || "";
+    const responseText = await res.text();
+
+    if (!res.ok) {
+      if (contentType.includes("application/json")) {
+        try {
+          const errJson = JSON.parse(responseText);
+          throw new Error(errJson.message || `HTTP ${status}: ${errJson.error || "Unknown error"}`);
+        } catch {
+          // Fallback if parsing fails
+        }
+      }
+      throw new Error(`HTTP Error ${status} (${contentType}): ${responseText.substring(0, 300)}`);
+    }
+
+    if (!contentType.includes("application/json")) {
+      throw new Error(`Invalid Response (expected JSON, got ${contentType}): ${responseText.substring(0, 300)}`);
+    }
+
+    try {
+      const data = JSON.parse(responseText);
+      return data.tree || [];
+    } catch (parseErr: any) {
+      throw new Error(`JSON Parse Error: ${parseErr.message} for body: ${responseText.substring(0, 300)}`);
+    }
   }
 }

@@ -91,6 +91,7 @@ export interface RemoteFileEntry {
   sha: string;
   content: string;
   updatedAt: string;
+  type?: "tree" | "blob";
 }
 
 export interface SecurityTestResult {

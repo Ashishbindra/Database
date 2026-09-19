@@ -6,10 +6,10 @@
 import React, { useState, useEffect } from "react";
 import { CentralDataClient } from "../../sdk/CentralDataClient";
 import { GitHubMockRemote } from "../../sdk/storage/GitHubMockRemote";
-import { FolderTree, FileCode, Lock, RefreshCw, Eye } from "lucide-react";
+import { FolderTree, FileCode, Lock, RefreshCw, Eye, Folder } from "lucide-react";
 
 export const RemoteStorageInspector: React.FC<{ sdk: CentralDataClient }> = ({ sdk }) => {
-  const [fileList, setFileList] = useState<string[]>([]);
+  const [fileList, setFileList] = useState<any[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
@@ -24,13 +24,13 @@ export const RemoteStorageInspector: React.FC<{ sdk: CentralDataClient }> = ({ s
       if (sdk.githubClient.getConfig().mode === "MOCK") {
         const mockFiles = GitHubMockRemote.getAllVirtualFiles();
         const paths = Object.keys(mockFiles);
-        setFileList(paths);
+        setFileList(paths.map((p) => ({ path: p, type: "blob" })));
         if (paths.length > 0 && !selectedFile) {
           handleSelectFile(paths[0]);
         }
       } else {
         const userEntries = await sdk.githubClient.listDirectory("data/users");
-        setFileList(userEntries.map((e) => e.path));
+        setFileList(userEntries.map((e) => ({ path: e.path, type: e.type })));
       }
     } catch (err) {
       console.error(err);
@@ -84,20 +84,31 @@ export const RemoteStorageInspector: React.FC<{ sdk: CentralDataClient }> = ({ s
             {fileList.length === 0 ? (
               <p className="text-xs text-stone-500 py-6 text-center">No remote files present on GitHub repository yet.</p>
             ) : (
-              fileList.map((path) => (
-                <button
-                  key={path}
-                  onClick={() => handleSelectFile(path)}
-                  className={`w-full text-left p-2.5 rounded-lg text-xs font-mono flex items-center gap-2 truncate transition ${
-                    selectedFile === path
-                      ? "bg-amber-500/10 text-amber-300 border border-amber-500/20"
-                      : "text-stone-400 hover:bg-stone-800 hover:text-stone-200"
-                  }`}
-                >
-                  <FileCode className="w-3.5 h-3.5 text-stone-500 flex-shrink-0" />
-                  <span className="truncate">{path}</span>
-                </button>
-              ))
+              fileList.map((item) => {
+                const path = typeof item === "string" ? item : item.path;
+                const isDir = typeof item === "string" ? false : item.type === "tree";
+                return (
+                  <button
+                    key={path}
+                    onClick={() => !isDir && handleSelectFile(path)}
+                    disabled={isDir}
+                    className={`w-full text-left p-2.5 rounded-lg text-xs font-mono flex items-center gap-2 truncate transition ${
+                      isDir
+                        ? "text-stone-500 bg-stone-900/40 cursor-default border border-transparent"
+                        : selectedFile === path
+                        ? "bg-amber-500/10 text-amber-300 border border-amber-500/20"
+                        : "text-stone-400 hover:bg-stone-800 hover:text-stone-200 border border-transparent"
+                    }`}
+                  >
+                    {isDir ? (
+                      <Folder className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                    ) : (
+                      <FileCode className="w-3.5 h-3.5 text-stone-500 flex-shrink-0" />
+                    )}
+                    <span className="truncate">{path}</span>
+                  </button>
+                );
+              })
             )}
           </div>
         </div>
