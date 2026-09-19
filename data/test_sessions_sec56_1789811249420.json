@@ -1,0 +1,11 @@
+{
+  "sessions": {
+    "e3c0357327979a7ed06fbb833b720012": {
+      "sessionId": "e3c0357327979a7ed06fbb833b720012",
+      "opaqueUserId": "u_sec56_1789811249420",
+      "issuedAt": 1789811249420,
+      "expiresAt": 1789897649420
+    }
+  },
+  "revokedIds": []
+}

@@ -1,0 +1,74 @@
+{
+  "sessions": {
+    "f9a52cb7e3cde7a2ed4674f78e3cafca": {
+      "sessionId": "f9a52cb7e3cde7a2ed4674f78e3cafca",
+      "opaqueUserId": "u_a0e3baedac294d23",
+      "issuedAt": 1789810961434,
+      "expiresAt": 1789897361434
+    },
+    "f5444e903b27b572c506361ad8de4465": {
+      "sessionId": "f5444e903b27b572c506361ad8de4465",
+      "opaqueUserId": "u_75d0a69307d18950",
+      "issuedAt": 1789810963136,
+      "expiresAt": 1789897363136
+    },
+    "da99608c04a81daf299e236a3bad95a2": {
+      "sessionId": "da99608c04a81daf299e236a3bad95a2",
+      "opaqueUserId": "u_0b60ec65241c87bb",
+      "issuedAt": 1789811049412,
+      "expiresAt": 1789897449412
+    },
+    "8e71bbf8eda304f1e351453aa762e376": {
+      "sessionId": "8e71bbf8eda304f1e351453aa762e376",
+      "opaqueUserId": "u_83643b1d7b70b5d9",
+      "issuedAt": 1789811246617,
+      "expiresAt": 1789897646617
+    },
+    "918b62b580f3f1e1c7e5b56ba4334437": {
+      "sessionId": "918b62b580f3f1e1c7e5b56ba4334437",
+      "opaqueUserId": "u_156f76164f593981",
+      "issuedAt": 1789811248329,
+      "expiresAt": 1789897648329
+    },
+    "a2a6acfce82ce7fd9884a537422f88db": {
+      "sessionId": "a2a6acfce82ce7fd9884a537422f88db",
+      "opaqueUserId": "u_bac662b7d257ec26",
+      "issuedAt": 1789811438392,
+      "expiresAt": 1789897838392
+    },
+    "c50010ec313e6d83b9eee08d8e9121f8": {
+      "sessionId": "c50010ec313e6d83b9eee08d8e9121f8",
+      "opaqueUserId": "u_e41753144fb8d656",
+      "issuedAt": 1789811440240,
+      "expiresAt": 1789897840240
+    },
+    "e5d0d5c6d59e31dee0cfe854c428bda1": {
+      "sessionId": "e5d0d5c6d59e31dee0cfe854c428bda1",
+      "opaqueUserId": "u_8ba9bacb032410b7",
+      "issuedAt": 1789812467325,
+      "expiresAt": 1789898867325
+    },
+    "a7650951cf430eba53e42359e79138ca": {
+      "sessionId": "a7650951cf430eba53e42359e79138ca",
+      "opaqueUserId": "u_55b6ec38064d89a4",
+      "issuedAt": 1789812469008,
+      "expiresAt": 1789898869008
+    }
+  },
+  "revokedIds": [
+    "b2be116921a103ddef06bdf383c59a54",
+    "0c709271c724cb022b658431954bb59d",
+    "86abcbd95f43109c421b5965784557ef",
+    "2bba91200b42b12ac54f8f3ae040e540",
+    "b156c88d25f26d693f2c4351284793dd",
+    "a93a6b0f977054e52aee6fdcca5a3e9e",
+    "3b07716d18a228c964e025916065b0af",
+    "61d8d6177c86372e0f39a16a4f789983",
+    "ed7b9e808463c5b58d9099e337787356",
+    "de99d4b6fa9325b389bcb655109de35f",
+    "b4df560fcd5b42dd3e0d1329f49ecc9a",
+    "480c89d1352b9888c35f806cdb0fbd96",
+    "0580fbf6669fdc769cd15ed06cce58ad",
+    "8c3bbe949378839e8922a35b636105d5"
+  ]
+}

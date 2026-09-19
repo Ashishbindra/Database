@@ -1,0 +1,6 @@
+{
+  "name": "GitHub Encrypted Storage SDK",
+  "description": "Production-quality, zero-cost GitHub-backed E2E encrypted storage system supporting multi-app isolation, AES-256-GCM, offline IndexedDB sync, and key recovery.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
