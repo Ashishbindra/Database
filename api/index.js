@@ -6070,14 +6070,95 @@ try {
 } catch {
 }
 var app = express();
+var VAULT_SUBROUTES = /* @__PURE__ */ new Set([
+  "register",
+  "login",
+  "auth-params",
+  "auth-challenge",
+  "logout",
+  "session",
+  "state",
+  "sync",
+  "recovery",
+  "account",
+  "tree",
+  "file",
+  "stats",
+  "test-sync",
+  "unlock",
+  "lock",
+  "store",
+  "retrieve",
+  "delete"
+]);
+function normalizeVaultUrl(rawUrl, headers) {
+  let target = rawUrl || "/";
+  if (headers) {
+    const original = headers["x-vercel-original-url"] || headers["x-forwarded-uri"] || headers["x-original-url"];
+    if (typeof original === "string" && original.trim() && original !== "/" && original !== "/api" && original !== "/api/") {
+      target = original.trim();
+    }
+  }
+  const qIndex = target.indexOf("?");
+  let pathname = qIndex !== -1 ? target.slice(0, qIndex) : target;
+  let queryString = qIndex !== -1 ? target.slice(qIndex + 1) : "";
+  if (pathname === "/api" || pathname === "/api/" || pathname === "/" || pathname === "") {
+    let captured = null;
+    if (headers && headers["x-now-route-matches"]) {
+      const matchHeader = String(headers["x-now-route-matches"]);
+      const match = matchHeader.match(/(?:^|[&;])(?:1|match|path)=([^&;]+)/);
+      if (match && match[1]) {
+        try {
+          captured = decodeURIComponent(match[1]);
+        } catch {
+        }
+      }
+    }
+    if (!captured && queryString) {
+      try {
+        const searchParams = new URLSearchParams(queryString);
+        const paramVal = searchParams.get("1") || searchParams.get("path") || searchParams.get("match");
+        if (paramVal) {
+          captured = paramVal;
+          searchParams.delete("1");
+          searchParams.delete("path");
+          searchParams.delete("match");
+          queryString = searchParams.toString();
+        }
+      } catch {
+      }
+    }
+    if (captured) {
+      const cleanCaptured = captured.replace(/^\/+/, "");
+      pathname = `/api/${cleanCaptured}`;
+    }
+  }
+  const query = queryString ? `?${queryString}` : "";
+  if (pathname === "/health" || pathname === "/api/health" || pathname.endsWith("/health")) {
+    return `/api/health${query}`;
+  }
+  if (pathname.startsWith("/testing/")) {
+    return `/api${pathname}${query}`;
+  }
+  if (pathname.startsWith("/api/vault/") || pathname === "/api/vault") {
+    return `${pathname}${query}`;
+  }
+  if (pathname.startsWith("/vault/") || pathname === "/vault") {
+    return `/api${pathname}${query}`;
+  }
+  const cleanPath = pathname.startsWith("/") ? pathname.slice(1) : pathname;
+  const segments = cleanPath.split("/").filter(Boolean);
+  if (segments.length > 0 && VAULT_SUBROUTES.has(segments[0])) {
+    return `/api/vault/${segments.join("/")}${query}`;
+  }
+  if (!pathname.startsWith("/api")) {
+    const prefixed = "/api" + (pathname.startsWith("/") ? pathname : "/" + pathname);
+    return `${prefixed}${query}`;
+  }
+  return `${pathname}${query}`;
+}
 app.use((req, _res, next) => {
-  const originalUrl = req.headers && (req.headers["x-vercel-original-url"] || req.headers["x-forwarded-uri"] || req.headers["x-original-url"]);
-  if (originalUrl && typeof originalUrl === "string") {
-    req.url = originalUrl;
-  }
-  if (req.url.startsWith("/vault/") || req.url === "/health" || req.url.startsWith("/testing/")) {
-    req.url = "/api" + req.url;
-  }
+  req.url = normalizeVaultUrl(req.url, req.headers);
   next();
 });
 function isProductionRuntime() {
@@ -6478,8 +6559,9 @@ app.use("/api/vault", (_req, res, next) => {
   }
   next();
 });
-app.post("/api/vault/register", rateLimiter(10, 6e4), async (req, res) => {
+app.post(["/api/vault/register", "/vault/register", "/register"], rateLimiter(10, 6e4), async (req, res) => {
   try {
+    console.log("[REGISTRATION_ROUTE_REACHED] POST /api/vault/register handler executing");
     const config = checkGitHubStorageConfig();
     if (isProductionRuntime() && !config.valid) {
       return res.status(503).json({
@@ -6586,7 +6668,7 @@ app.post("/api/vault/auth-challenge", rateLimiter(30, 6e4), async (req, res) => 
     return res.status(500).json({ error: "Challenge Generation Failed", message: err.message });
   }
 });
-app.post("/api/vault/login", rateLimiter(15, 6e4), async (req, res) => {
+app.post(["/api/vault/login", "/vault/login", "/login"], rateLimiter(15, 6e4), async (req, res) => {
   try {
     const { opaqueUserId, challengeId, challengeProof } = req.body;
     if (!opaqueUserId || !challengeId || !challengeProof) {
@@ -6857,7 +6939,7 @@ app.delete("/api/vault/account", requireAuth, async (req, res) => {
     return res.status(500).json({ error: "Deletion Failed", message: err.message });
   }
 });
-app.get("/api/vault/tree", requireAuth, async (req, res) => {
+app.get(["/api/vault/tree", "/vault/tree", "/tree"], requireAuth, async (req, res) => {
   const session = req.session;
   const username = session ? session.opaqueUserId : "anonymous";
   const owner = getGitHubOwner();
@@ -7124,7 +7206,7 @@ app.post("/api/testing/run", async (req, res) => {
     return res.status(500).json({ error: "Testing Failed", message: err.message });
   }
 });
-app.all("/api/*", (req, res) => {
+app.all(["/api", "/api/*"], (req, res) => {
   return res.status(404).json({
     error: "Not Found",
     message: `API endpoint ${req.method} ${req.path} not found.`
@@ -7133,16 +7215,97 @@ app.all("/api/*", (req, res) => {
 var app_default = app;
 
 // src/server/vercel-handler.ts
+var VAULT_SUBROUTES2 = /* @__PURE__ */ new Set([
+  "register",
+  "login",
+  "auth-params",
+  "auth-challenge",
+  "logout",
+  "session",
+  "state",
+  "sync",
+  "recovery",
+  "account",
+  "tree",
+  "file",
+  "stats",
+  "test-sync",
+  "unlock",
+  "lock",
+  "store",
+  "retrieve",
+  "delete"
+]);
+function normalizeVaultUrl2(rawUrl, headers) {
+  let target = rawUrl || "/";
+  if (headers) {
+    const original = headers["x-vercel-original-url"] || headers["x-forwarded-uri"] || headers["x-original-url"];
+    if (typeof original === "string" && original.trim() && original !== "/" && original !== "/api" && original !== "/api/") {
+      target = original.trim();
+    }
+  }
+  const qIndex = target.indexOf("?");
+  let pathname = qIndex !== -1 ? target.slice(0, qIndex) : target;
+  let queryString = qIndex !== -1 ? target.slice(qIndex + 1) : "";
+  if (pathname === "/api" || pathname === "/api/" || pathname === "/" || pathname === "") {
+    let captured = null;
+    if (headers && headers["x-now-route-matches"]) {
+      const matchHeader = String(headers["x-now-route-matches"]);
+      const match = matchHeader.match(/(?:^|[&;])(?:1|match|path)=([^&;]+)/);
+      if (match && match[1]) {
+        try {
+          captured = decodeURIComponent(match[1]);
+        } catch {
+        }
+      }
+    }
+    if (!captured && queryString) {
+      try {
+        const searchParams = new URLSearchParams(queryString);
+        const paramVal = searchParams.get("1") || searchParams.get("path") || searchParams.get("match");
+        if (paramVal) {
+          captured = paramVal;
+          searchParams.delete("1");
+          searchParams.delete("path");
+          searchParams.delete("match");
+          queryString = searchParams.toString();
+        }
+      } catch {
+      }
+    }
+    if (captured) {
+      const cleanCaptured = captured.replace(/^\/+/, "");
+      pathname = `/api/${cleanCaptured}`;
+    }
+  }
+  const query = queryString ? `?${queryString}` : "";
+  if (pathname === "/health" || pathname === "/api/health" || pathname.endsWith("/health")) {
+    return `/api/health${query}`;
+  }
+  if (pathname.startsWith("/testing/")) {
+    return `/api${pathname}${query}`;
+  }
+  if (pathname.startsWith("/api/vault/") || pathname === "/api/vault") {
+    return `${pathname}${query}`;
+  }
+  if (pathname.startsWith("/vault/") || pathname === "/vault") {
+    return `/api${pathname}${query}`;
+  }
+  const cleanPath = pathname.startsWith("/") ? pathname.slice(1) : pathname;
+  const segments = cleanPath.split("/").filter(Boolean);
+  if (segments.length > 0 && VAULT_SUBROUTES2.has(segments[0])) {
+    return `/api/vault/${segments.join("/")}${query}`;
+  }
+  if (!pathname.startsWith("/api")) {
+    const prefixed = "/api" + (pathname.startsWith("/") ? pathname : "/" + pathname);
+    return `${prefixed}${query}`;
+  }
+  return `${pathname}${query}`;
+}
 function handler(req, res) {
-  const originalUrl = req.headers && (req.headers["x-vercel-original-url"] || req.headers["x-forwarded-uri"] || req.headers["x-original-url"] || req.headers["x-matched-path"]);
-  if (originalUrl && typeof originalUrl === "string") {
-    req.url = originalUrl;
-  }
-  if (req.url && !req.url.startsWith("/api") && !req.url.startsWith("/index.html")) {
-    req.url = "/api" + (req.url.startsWith("/") ? req.url : "/" + req.url);
-  }
+  req.url = normalizeVaultUrl2(req.url || "/", req.headers);
   const cleanUrl = (req.url || "").split("?")[0];
-  if (cleanUrl === "/api/health" || cleanUrl === "/health" || cleanUrl.endsWith("/health")) {
+  if (cleanUrl === "/api/health") {
     res.statusCode = 200;
     res.setHeader("Content-Type", "application/json");
     res.end(
@@ -7157,6 +7320,7 @@ function handler(req, res) {
 }
 export {
   app_default as app,
-  handler as default
+  handler as default,
+  normalizeVaultUrl2 as normalizeVaultUrl
 };
 //# sourceMappingURL=index.js.map

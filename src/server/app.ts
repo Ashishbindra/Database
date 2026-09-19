@@ -49,16 +49,126 @@ try {
 
 const app = express();
 
+// Known vault sub-routes that might arrive stripped of /api/vault
+const VAULT_SUBROUTES = new Set([
+  "register",
+  "login",
+  "auth-params",
+  "auth-challenge",
+  "logout",
+  "session",
+  "state",
+  "sync",
+  "recovery",
+  "account",
+  "tree",
+  "file",
+  "stats",
+  "test-sync",
+  "unlock",
+  "lock",
+  "store",
+  "retrieve",
+  "delete",
+]);
+
+function normalizeVaultUrl(rawUrl: string, headers?: Record<string, any>): string {
+  let target = rawUrl || "/";
+
+  // Check headers for original request URL if available
+  if (headers) {
+    const original =
+      headers["x-vercel-original-url"] ||
+      headers["x-forwarded-uri"] ||
+      headers["x-original-url"];
+    if (
+      typeof original === "string" &&
+      original.trim() &&
+      original !== "/" &&
+      original !== "/api" &&
+      original !== "/api/"
+    ) {
+      target = original.trim();
+    }
+  }
+
+  // Separate pathname and query string
+  const qIndex = target.indexOf("?");
+  let pathname = qIndex !== -1 ? target.slice(0, qIndex) : target;
+  let queryString = qIndex !== -1 ? target.slice(qIndex + 1) : "";
+
+  // If pathname is base /api or / and path was captured in Vercel rewrite headers or query params
+  if (pathname === "/api" || pathname === "/api/" || pathname === "/" || pathname === "") {
+    let captured: string | null = null;
+
+    // 1. Check x-now-route-matches header (e.g. 1=vault%2Fregister)
+    if (headers && headers["x-now-route-matches"]) {
+      const matchHeader = String(headers["x-now-route-matches"]);
+      const match = matchHeader.match(/(?:^|[&;])(?:1|match|path)=([^&;]+)/);
+      if (match && match[1]) {
+        try {
+          captured = decodeURIComponent(match[1]);
+        } catch {}
+      }
+    }
+
+    // 2. Check query string for captured param '1', 'path', or 'match'
+    if (!captured && queryString) {
+      try {
+        const searchParams = new URLSearchParams(queryString);
+        const paramVal = searchParams.get("1") || searchParams.get("path") || searchParams.get("match");
+        if (paramVal) {
+          captured = paramVal;
+          // Clean the internal Vercel rewrite param so it doesn't pollute user req.query
+          searchParams.delete("1");
+          searchParams.delete("path");
+          searchParams.delete("match");
+          queryString = searchParams.toString();
+        }
+      } catch {}
+    }
+
+    if (captured) {
+      const cleanCaptured = captured.replace(/^\/+/, "");
+      pathname = `/api/${cleanCaptured}`;
+    }
+  }
+
+  const query = queryString ? `?${queryString}` : "";
+
+  if (pathname === "/health" || pathname === "/api/health" || pathname.endsWith("/health")) {
+    return `/api/health${query}`;
+  }
+
+  if (pathname.startsWith("/testing/")) {
+    return `/api${pathname}${query}`;
+  }
+
+  if (pathname.startsWith("/api/vault/") || pathname === "/api/vault") {
+    return `${pathname}${query}`;
+  }
+
+  if (pathname.startsWith("/vault/") || pathname === "/vault") {
+    return `/api${pathname}${query}`;
+  }
+
+  const cleanPath = pathname.startsWith("/") ? pathname.slice(1) : pathname;
+  const segments = cleanPath.split("/").filter(Boolean);
+  if (segments.length > 0 && VAULT_SUBROUTES.has(segments[0])) {
+    return `/api/vault/${segments.join("/")}${query}`;
+  }
+
+  if (!pathname.startsWith("/api")) {
+    const prefixed = "/api" + (pathname.startsWith("/") ? pathname : "/" + pathname);
+    return `${prefixed}${query}`;
+  }
+
+  return `${pathname}${query}`;
+}
+
 // Middleware: Normalize URL for Vercel Rewrites
 app.use((req: Request, _res: Response, next: NextFunction) => {
-  const originalUrl =
-    (req.headers && (req.headers["x-vercel-original-url"] || req.headers["x-forwarded-uri"] || req.headers["x-original-url"])) as string;
-  if (originalUrl && typeof originalUrl === "string") {
-    req.url = originalUrl;
-  }
-  if (req.url.startsWith("/vault/") || req.url === "/health" || req.url.startsWith("/testing/")) {
-    req.url = "/api" + req.url;
-  }
+  req.url = normalizeVaultUrl(req.url, req.headers as Record<string, any>);
   next();
 });
 
@@ -575,8 +685,9 @@ app.use("/api/vault", (_req: Request, res: Response, next: NextFunction) => {
 });
 
 // 1. POST /api/vault/register
-app.post("/api/vault/register", rateLimiter(10, 60000), async (req: Request, res: Response) => {
+app.post(["/api/vault/register", "/vault/register", "/register"], rateLimiter(10, 60000), async (req: Request, res: Response) => {
   try {
+    console.log("[REGISTRATION_ROUTE_REACHED] POST /api/vault/register handler executing");
     const config = checkGitHubStorageConfig();
     if (isProductionRuntime() && !config.valid) {
       return res.status(503).json({
@@ -703,7 +814,7 @@ app.post("/api/vault/auth-challenge", rateLimiter(30, 60000), async (req: Reques
 });
 
 // 3. POST /api/vault/login
-app.post("/api/vault/login", rateLimiter(15, 60000), async (req: Request, res: Response) => {
+app.post(["/api/vault/login", "/vault/login", "/login"], rateLimiter(15, 60000), async (req: Request, res: Response) => {
   try {
     const { opaqueUserId, challengeId, challengeProof } = req.body;
     if (!opaqueUserId || !challengeId || !challengeProof) {
@@ -1032,7 +1143,7 @@ app.delete("/api/vault/account", requireAuth, async (req: Request, res: Response
 });
 
 // 9.5. GET /api/vault/tree & GET /api/vault/file (Secure Proxies for GitHub Storage Tree Listing)
-app.get("/api/vault/tree", requireAuth, async (req: Request, res: Response) => {
+app.get(["/api/vault/tree", "/vault/tree", "/tree"], requireAuth, async (req: Request, res: Response) => {
   const session = (req as any).session;
   const username = session ? session.opaqueUserId : "anonymous";
 
@@ -1356,8 +1467,8 @@ app.post("/api/testing/run", async (req: Request, res: Response) => {
   }
 });
 
-// Guarantee that any unhandled /api/* requests never fall through to index.html/Vite middlewares
-app.all("/api/*", (req: Request, res: Response) => {
+// Guarantee that any unhandled /api or /api/* requests never fall through to index.html/Vite middlewares
+app.all(["/api", "/api/*"], (req: Request, res: Response) => {
   return res.status(404).json({
     error: "Not Found",
     message: `API endpoint ${req.method} ${req.path} not found.`,

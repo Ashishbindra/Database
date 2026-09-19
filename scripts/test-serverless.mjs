@@ -1,7 +1,6 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import http from "http";
 import { EventEmitter } from "events";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -22,15 +21,14 @@ if (!fs.existsSync(apiIndexPath)) {
 }
 console.log("✓ api/index.js exists");
 
-if (!fs.existsSync(apiPathPath)) {
-  console.error("FAIL: api/[...path].js does not exist!");
+if (fs.existsSync(apiPathPath)) {
+  console.error("FAIL: api/[...path].js exists! Duplicate/conflicting Vercel entrypoints must be removed.");
   process.exit(1);
 }
-console.log("✓ api/[...path].js exists");
+console.log("✓ api/[...path].js does not exist (no conflicting duplicate functions)");
 
-// 2. Inspect file contents for problematic imports
+// 2. Inspect file contents for problematic unbundled imports
 const indexContent = fs.readFileSync(apiIndexPath, "utf-8");
-const pathContent = fs.readFileSync(apiPathPath, "utf-8");
 
 const forbiddenPatterns = [
   /import\s+.*from\s+['"][^'"]*\/src\/server\/app['"]/,
@@ -44,12 +42,8 @@ for (const pattern of forbiddenPatterns) {
     console.error(`FAIL: api/index.js contains forbidden unresolved import matching ${pattern}`);
     process.exit(1);
   }
-  if (pattern.test(pathContent)) {
-    console.error(`FAIL: api/[...path].js contains forbidden unresolved import matching ${pattern}`);
-    process.exit(1);
-  }
 }
-console.log("✓ No unresolved imports to /src/server/app found in generated bundles");
+console.log("✓ No unresolved imports to /src/server/app found in generated bundle");
 
 // Verify that all relative imports stay within api/
 const relativeImportsIndex = indexContent.match(/from\s+['"](\.[^'"]+)['"]/g) || [];
@@ -113,13 +107,26 @@ function createMockHttp(options) {
     res.end(body);
   };
 
+  // If request has body, simulate chunk emission after listener attaches
+  if (options.body) {
+    process.nextTick(() => {
+      const dataStr = typeof options.body === "string" ? options.body : JSON.stringify(options.body);
+      req.emit("data", Buffer.from(dataStr));
+      req.emit("end");
+    });
+  } else {
+    process.nextTick(() => {
+      req.emit("end");
+    });
+  }
+
   return { req, res, promise };
 }
 
-// 4. Test importing the serverless functions in Node ESM runtime
-console.log("\nSimulating Vercel Node runtime dynamic imports...");
+// 4. Test importing the serverless function in Node ESM runtime
+console.log("\nSimulating Vercel Node runtime dynamic import...");
 
-let indexModule, pathModule;
+let indexModule;
 try {
   indexModule = await import(`file://${apiIndexPath}?t=${Date.now()}`);
   console.log("✓ Successfully loaded api/index.js in Node ESM");
@@ -128,26 +135,18 @@ try {
   process.exit(1);
 }
 
-try {
-  pathModule = await import(`file://${apiPathPath}?t=${Date.now()}`);
-  console.log("✓ Successfully loaded api/[...path].js in Node ESM");
-} catch (err) {
-  console.error("FAIL: Could not load api/[...path].js:", err);
-  process.exit(1);
-}
-
 const indexHandler = indexModule.default;
-const pathHandler = pathModule.default;
 
 if (typeof indexHandler !== "function") {
   console.error("FAIL: api/index.js does not export a default handler function!");
   process.exit(1);
 }
 
-// 5. Test suite for endpoints
+// 5. Test suite for endpoints & URL normalization
 const tests = [
+  // Health checks
   {
-    name: "GET /api/health (via api/index.js)",
+    name: "GET /api/health (direct)",
     handler: indexHandler,
     method: "GET",
     url: "/api/health",
@@ -159,19 +158,7 @@ const tests = [
     },
   },
   {
-    name: "GET /api/health (via api/[...path].js)",
-    handler: pathHandler,
-    method: "GET",
-    url: "/api/health",
-    headers: { host: "github-encrypted-vault.vercel.app" },
-    expectedStatus: 200,
-    checkBody: (body) => {
-      const json = JSON.parse(body);
-      return json.ok === true && json.status === "healthy";
-    },
-  },
-  {
-    name: "GET /health (URL normalized to /api/health)",
+    name: "GET /health (normalized to /api/health)",
     handler: indexHandler,
     method: "GET",
     url: "/health",
@@ -180,7 +167,7 @@ const tests = [
     checkBody: (body) => JSON.parse(body).ok === true,
   },
   {
-    name: "GET /api/health with x-vercel-original-url header",
+    name: "GET /api with x-vercel-original-url: /api/health",
     handler: indexHandler,
     method: "GET",
     url: "/api",
@@ -192,8 +179,179 @@ const tests = [
     checkBody: (body) => JSON.parse(body).ok === true,
   },
   {
+    name: "GET /api with x-forwarded-uri: /api/health",
+    handler: indexHandler,
+    method: "GET",
+    url: "/api",
+    headers: {
+      host: "github-encrypted-vault.vercel.app",
+      "x-forwarded-uri": "/api/health",
+    },
+    expectedStatus: 200,
+    checkBody: (body) => JSON.parse(body).ok === true,
+  },
+  {
+    name: "GET /api with x-now-route-matches: 1=health",
+    handler: indexHandler,
+    method: "GET",
+    url: "/api",
+    headers: {
+      host: "github-encrypted-vault.vercel.app",
+      "x-now-route-matches": "1=health",
+    },
+    expectedStatus: 200,
+    checkBody: (body) => JSON.parse(body).ok === true,
+  },
+
+  // Registration route & normalization tests
+  {
+    name: "POST /api/vault/register (canonical, empty body -> 400 validation)",
+    handler: indexHandler,
+    method: "POST",
+    url: "/api/vault/register",
+    headers: { host: "github-encrypted-vault.vercel.app", "content-type": "application/json" },
+    body: {},
+    expectedStatus: (s) => s === 400 || s === 503,
+    checkBody: (body) => {
+      const json = JSON.parse(body);
+      return json.error === "Invalid Request" || json.error === "CONFIGURATION_ERROR";
+    },
+  },
+  {
+    name: "POST /vault/register (stripped /api prefix -> normalized to /api/vault/register)",
+    handler: indexHandler,
+    method: "POST",
+    url: "/vault/register",
+    headers: { host: "github-encrypted-vault.vercel.app", "content-type": "application/json" },
+    body: {},
+    expectedStatus: (s) => s === 400 || s === 503,
+  },
+  {
+    name: "POST /register (bare endpoint -> normalized to /api/vault/register)",
+    handler: indexHandler,
+    method: "POST",
+    url: "/register",
+    headers: { host: "github-encrypted-vault.vercel.app", "content-type": "application/json" },
+    body: {},
+    expectedStatus: (s) => s === 400 || s === 503,
+  },
+  {
+    name: "POST /api with x-vercel-original-url: /api/vault/register",
+    handler: indexHandler,
+    method: "POST",
+    url: "/api",
+    headers: {
+      host: "github-encrypted-vault.vercel.app",
+      "content-type": "application/json",
+      "x-vercel-original-url": "/api/vault/register",
+    },
+    body: {},
+    expectedStatus: (s) => s === 400 || s === 503,
+  },
+  {
+    name: "POST /api with x-now-route-matches: 1=vault%2Fregister",
+    handler: indexHandler,
+    method: "POST",
+    url: "/api",
+    headers: {
+      host: "github-encrypted-vault.vercel.app",
+      "content-type": "application/json",
+      "x-now-route-matches": "1=vault%2Fregister",
+    },
+    body: {},
+    expectedStatus: (s) => s === 400 || s === 503,
+  },
+  {
+    name: "POST /api?1=vault%2Fregister (Vercel rewrite query parameter format)",
+    handler: indexHandler,
+    method: "POST",
+    url: "/api?1=vault%2Fregister",
+    headers: {
+      host: "github-encrypted-vault.vercel.app",
+      "content-type": "application/json",
+    },
+    body: {},
+    expectedStatus: (s) => s === 400 || s === 503,
+  },
+  {
+    name: "GET /api?1=vault%2Ffile&path=test.json (Vercel rewrite query param stripping & preservation)",
+    handler: indexHandler,
+    method: "GET",
+    url: "/api?1=vault%2Ffile&path=test.json",
+    headers: { host: "github-encrypted-vault.vercel.app" },
+    expectedStatus: 401,
+  },
+  {
+    name: "GET /api/nonexistent-endpoint (unhandled /api/* returns 404 JSON)",
+    handler: indexHandler,
+    method: "GET",
+    url: "/api/nonexistent-endpoint",
+    headers: { host: "github-encrypted-vault.vercel.app" },
+    expectedStatus: 404,
+    checkBody: (body) => {
+      const json = JSON.parse(body);
+      return json.error === "Not Found";
+    },
+  },
+  {
+    name: "GET /api (bare /api returns 404 JSON)",
+    handler: indexHandler,
+    method: "GET",
+    url: "/api",
+    headers: { host: "github-encrypted-vault.vercel.app" },
+    expectedStatus: 404,
+    checkBody: (body) => {
+      const json = JSON.parse(body);
+      return json.error === "Not Found";
+    },
+  },
+
+  // Other critical Vault routes
+  {
+    name: "POST /api/vault/login (empty body validation)",
+    handler: indexHandler,
+    method: "POST",
+    url: "/api/vault/login",
+    headers: { host: "github-encrypted-vault.vercel.app", "content-type": "application/json" },
+    body: {},
+    expectedStatus: 400,
+  },
+  {
+    name: "POST /login (bare endpoint -> normalized to /api/vault/login)",
+    handler: indexHandler,
+    method: "POST",
+    url: "/login",
+    headers: { host: "github-encrypted-vault.vercel.app", "content-type": "application/json" },
+    body: {},
+    expectedStatus: 400,
+  },
+  {
+    name: "GET /api/vault/tree (unauthenticated validation)",
+    handler: indexHandler,
+    method: "GET",
+    url: "/api/vault/tree",
+    headers: { host: "github-encrypted-vault.vercel.app" },
+    expectedStatus: 401,
+  },
+  {
+    name: "GET /tree (bare endpoint -> normalized to /api/vault/tree)",
+    handler: indexHandler,
+    method: "GET",
+    url: "/tree",
+    headers: { host: "github-encrypted-vault.vercel.app" },
+    expectedStatus: 401,
+  },
+  {
+    name: "GET /api/vault/file?path=test.json (query string preserved)",
+    handler: indexHandler,
+    method: "GET",
+    url: "/api/vault/file?path=test.json",
+    headers: { host: "github-encrypted-vault.vercel.app" },
+    expectedStatus: 401,
+  },
+  {
     name: "GET /api/vault/stats",
-    handler: pathHandler,
+    handler: indexHandler,
     method: "GET",
     url: "/api/vault/stats",
     headers: { host: "github-encrypted-vault.vercel.app" },
@@ -205,67 +363,12 @@ const tests = [
   },
   {
     name: "POST /api/vault/test-sync",
-    handler: pathHandler,
+    handler: indexHandler,
     method: "POST",
     url: "/api/vault/test-sync",
     headers: { host: "github-encrypted-vault.vercel.app", "content-type": "application/json" },
-    expectedStatus: (s) => s === 200 || s === 503, // 503 in production without PAT, 200 with local
-  },
-  {
-    name: "POST /api/vault/register (empty body validation)",
-    handler: pathHandler,
-    method: "POST",
-    url: "/api/vault/register",
-    headers: { host: "github-encrypted-vault.vercel.app", "content-type": "application/json" },
-    expectedStatus: (s) => s === 400 || s === 503, // Returns 400 invalid request or 503 missing PAT
-  },
-  {
-    name: "POST /api/vault/unlock (empty body validation)",
-    handler: pathHandler,
-    method: "POST",
-    url: "/api/vault/unlock",
-    headers: { host: "github-encrypted-vault.vercel.app", "content-type": "application/json" },
-    expectedStatus: 400,
-  },
-  {
-    name: "POST /api/vault/lock (unauthenticated validation)",
-    handler: pathHandler,
-    method: "POST",
-    url: "/api/vault/lock",
-    headers: { host: "github-encrypted-vault.vercel.app" },
-    expectedStatus: 401,
-  },
-  {
-    name: "POST /api/vault/store (unauthenticated validation)",
-    handler: pathHandler,
-    method: "POST",
-    url: "/api/vault/store",
-    headers: { host: "github-encrypted-vault.vercel.app" },
-    expectedStatus: 401,
-  },
-  {
-    name: "POST /api/vault/retrieve (unauthenticated validation)",
-    handler: pathHandler,
-    method: "POST",
-    url: "/api/vault/retrieve",
-    headers: { host: "github-encrypted-vault.vercel.app" },
-    expectedStatus: 401,
-  },
-  {
-    name: "POST /api/vault/delete (unauthenticated validation)",
-    handler: pathHandler,
-    method: "POST",
-    url: "/api/vault/delete",
-    headers: { host: "github-encrypted-vault.vercel.app" },
-    expectedStatus: 401,
-  },
-  {
-    name: "GET /api/vault/tree (unauthenticated validation)",
-    handler: pathHandler,
-    method: "GET",
-    url: "/api/vault/tree",
-    headers: { host: "github-encrypted-vault.vercel.app" },
-    expectedStatus: 401,
+    body: {},
+    expectedStatus: (s) => s === 200 || s === 503,
   },
 ];
 

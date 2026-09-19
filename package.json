@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && esbuild src/server/vercel-handler.ts --bundle --platform=node --format=esm --packages=external --sourcemap --outfile=api/index.js && cp api/index.js api/\\[...path\\].js && cp api/index.js.map api/\\[...path\\].js.map",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && esbuild src/server/vercel-handler.ts --bundle --platform=node --format=esm --packages=external --sourcemap --outfile=api/index.js",
     "start": "node dist/server.cjs",
-    "clean": "rm -rf dist server.cjs api/index.js api/\\[...path\\].js",
+    "clean": "rm -rf dist server.cjs api/index.js api/index.js.map api/\\[...path\\].js*",
     "lint": "tsc --noEmit",
     "test:security": "tsx -e \"import('./src/sdk/testing/SecurityTestRunner.ts').then(m => m.SecurityTestRunner.runAllTests()).then(r => { const passed = r.filter(x => x.status === 'PASSED').length; console.log('Total Tests:', r.length, 'Passed:', passed); if (passed < r.length) process.exit(1); })\"",
     "test:serverless": "node scripts/test-serverless.mjs",
