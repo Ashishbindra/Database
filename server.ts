@@ -5,6 +5,25 @@ import crypto from "crypto";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 
+declare global {
+  namespace Express {
+    interface Request {
+      user?: {
+        opaqueUserId: string;
+        sessionId: string;
+        issuedAt: number;
+        expiresAt: number;
+      };
+      session?: {
+        opaqueUserId: string;
+        sessionId: string;
+        issuedAt: number;
+        expiresAt: number;
+      };
+    }
+  }
+}
+
 dotenv.config();
 
 const app = express();
@@ -41,6 +60,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     host.includes("localhost") || 
     host.includes("127.0.0.1") || 
     host.includes("ais-dev");
+
+  console.log(`[ROUTE-DIAGNOSTIC] ${req.method} ${req.path} - Host: ${host} - DevMode: ${isDev} - Vercel: ${!!process.env.VERCEL}`);
 
   const connectSrc = isDev
     ? "connect-src 'self' https://api.github.com ws://127.0.0.1:24678 ws://localhost:24678;"
@@ -843,7 +864,22 @@ function validateVaultPath(sessionOpaqueUserId: string, filePath: string): strin
     }
   }
 
-  // 5. Strict User Isolation Prefix Check
+  // 5. Strict User Isolation Prefix Check (Extract requestedUserId from: data/users/<requestedUserId>/...)
+  let requestedUserId = "";
+  if (normalized.startsWith("data/users/")) {
+    const rest = normalized.slice("data/users/".length);
+    const slashIdx = rest.indexOf("/");
+    if (slashIdx !== -1) {
+      requestedUserId = rest.slice(0, slashIdx);
+    } else {
+      requestedUserId = rest;
+    }
+  }
+
+  if (!requestedUserId || requestedUserId !== sessionOpaqueUserId) {
+    throw { status: 403, message: "Forbidden: Access outside user directory is prohibited." };
+  }
+
   const expectedPrefix = `data/users/${sessionOpaqueUserId}/`;
   if (!normalized.startsWith(expectedPrefix)) {
     throw { status: 403, message: "Forbidden: Access outside user directory is prohibited." };
@@ -909,6 +945,31 @@ app.get("/api/vault/file", requireAuth, async (req: Request, res: Response) => {
   try {
     const session = (req as any).session;
     const filePath = req.query.path as string;
+
+    // Extract requestedUserId from filePath for temporary diagnostic logging
+    let decoded = filePath || "";
+    try {
+      decoded = decodeURIComponent(decoded);
+      decoded = decodeURIComponent(decoded);
+    } catch {
+      // ignore
+    }
+    let normalized = decoded.replace(/\\/g, "/");
+    let requestedUserId = "";
+    if (normalized.startsWith("data/users/")) {
+      const rest = normalized.slice("data/users/".length);
+      const slashIdx = rest.indexOf("/");
+      if (slashIdx !== -1) {
+        requestedUserId = rest.slice(0, slashIdx);
+      } else {
+        requestedUserId = rest;
+      }
+    }
+
+    // 12. Temporarily add safe diagnostic logs:
+    console.log("[FILE API] authenticated:", !!req.user);
+    console.log("[FILE API] authenticated opaqueUserId:", req.user?.opaqueUserId);
+    console.log("[FILE API] requested userId:", requestedUserId);
 
     const validatedPath = validateVaultPath(session.opaqueUserId, filePath);
 
@@ -1033,16 +1094,16 @@ app.post("/api/testing/run", async (req: Request, res: Response) => {
   }
 });
 
+// Guarantee that any unhandled /api/* requests never fall through to index.html/Vite middlewares
+app.all("/api/*", (req: Request, res: Response) => {
+  return res.status(404).json({
+    error: "Not Found",
+    message: `API endpoint ${req.method} ${req.path} not found.`
+  });
+});
+
 // Start Express + Vite Dev or Production Server
 async function startServer() {
-  // Guarantee that any unhandled /api/* requests never fall through to index.html/Vite middlewares
-  app.all("/api/*", (req: Request, res: Response) => {
-    return res.status(404).json({
-      error: "Not Found",
-      message: `API endpoint ${req.method} ${req.path} not found.`
-    });
-  });
-
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -1062,4 +1123,9 @@ async function startServer() {
   });
 }
 
-startServer();
+if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
+  startServer();
+}
+
+export { app };
+export default app;

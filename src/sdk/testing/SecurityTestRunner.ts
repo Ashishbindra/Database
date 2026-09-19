@@ -1800,6 +1800,152 @@ export class SecurityTestRunner {
       return "PASSED: Malformed authentication schema correctly failed and rejected with HTTP 401.";
     });
 
+    // SEC-109: Comprehensive Encrypted Vault CRUD verification
+    await runTest("SEC-109", "Complete CRUD operations flow validation with cleanup", "INTEGRITY", async () => {
+      const user = await registerAndLoginUser("sec109_crud");
+      const testFilePath = `data/users/${user.userId}/temp_crud_test.json`;
+      const initialPayload = JSON.stringify({ ciphertextHex: "a1b2c3d4", nonceHex: "f1f2" });
+      const updatedPayload = JSON.stringify({ ciphertextHex: "e5f6g7h8", nonceHex: "e1e2" });
+
+      let createdSha = "";
+      let updatedSha = "";
+
+      try {
+        // 1. CREATE (POST)
+        const postRes = await fetch(testOrigin + "/api/vault/file", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${user.token}`
+          },
+          body: JSON.stringify({
+            path: testFilePath,
+            content: initialPayload
+          })
+        });
+
+        if (postRes.status !== 200) {
+          throw new Error(`CREATE step failed with status ${postRes.status}`);
+        }
+        const postData = await postRes.json();
+        if (!postData.success || !postData.sha) {
+          throw new Error(`CREATE response invalid: ${JSON.stringify(postData)}`);
+        }
+        createdSha = postData.sha;
+
+        // 2. READ (GET)
+        const getRes1 = await fetch(testOrigin + `/api/vault/file?path=${encodeURIComponent(testFilePath)}`, {
+          headers: { Authorization: `Bearer ${user.token}` }
+        });
+        if (getRes1.status !== 200) {
+          throw new Error(`READ step failed with status ${getRes1.status}`);
+        }
+        const getData1 = await getRes1.json();
+        if (getData1.content !== initialPayload) {
+          throw new Error(`READ payload mismatch. Expected ${initialPayload}, got ${getData1.content}`);
+        }
+        if (getData1.sha !== createdSha) {
+          throw new Error(`READ SHA mismatch. Expected ${createdSha}, got ${getData1.sha}`);
+        }
+
+        // 3. UPDATE (PUT)
+        const putRes = await fetch(testOrigin + "/api/vault/file", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${user.token}`
+          },
+          body: JSON.stringify({
+            path: testFilePath,
+            content: updatedPayload,
+            expectedSha: createdSha
+          })
+        });
+        if (putRes.status !== 200) {
+          throw new Error(`UPDATE step failed with status ${putRes.status}`);
+        }
+        const putData = await putRes.json();
+        if (!putData.success || !putData.sha) {
+          throw new Error(`UPDATE response invalid: ${JSON.stringify(putData)}`);
+        }
+        updatedSha = putData.sha;
+
+        // 4. READ AFTER UPDATE (GET)
+        const getRes2 = await fetch(testOrigin + `/api/vault/file?path=${encodeURIComponent(testFilePath)}`, {
+          headers: { Authorization: `Bearer ${user.token}` }
+        });
+        if (getRes2.status !== 200) {
+          throw new Error(`READ-after-update step failed with status ${getRes2.status}`);
+        }
+        const getData2 = await getRes2.json();
+        if (getData2.content !== updatedPayload) {
+          throw new Error(`READ-after-update payload mismatch. Expected ${updatedPayload}, got ${getData2.content}`);
+        }
+        if (getData2.sha !== updatedSha) {
+          throw new Error(`READ-after-update SHA mismatch. Expected ${updatedSha}, got ${getData2.sha}`);
+        }
+
+        // 5. DELETE (DELETE)
+        const deleteRes = await fetch(testOrigin + `/api/vault/file`, {
+          method: "DELETE",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${user.token}`
+          },
+          body: JSON.stringify({
+            path: testFilePath,
+            sha: updatedSha
+          })
+        });
+        if (deleteRes.status !== 200) {
+          throw new Error(`DELETE step failed with status ${deleteRes.status}`);
+        }
+        const deleteData = await deleteRes.json();
+        if (!deleteData.success) {
+          throw new Error(`DELETE response invalid: ${JSON.stringify(deleteData)}`);
+        }
+
+        // 6. READ AFTER DELETE (GET)
+        const getRes3 = await fetch(testOrigin + `/api/vault/file?path=${encodeURIComponent(testFilePath)}`, {
+          headers: { Authorization: `Bearer ${user.token}` }
+        });
+        if (getRes3.status !== 404) {
+          throw new Error(`READ-after-delete expected status 404, got ${getRes3.status}`);
+        }
+        const getData3 = await getRes3.json();
+        if (getData3.error !== "Not Found") {
+          throw new Error(`READ-after-delete expected error "Not Found", got "${getData3.error}"`);
+        }
+
+        return "PASSED: All 6 CRUD operations (CREATE, READ, UPDATE, READ_AFTER_UPDATE, DELETE, READ_AFTER_DELETE) verified successfully on the authenticated user's own directory.";
+      } finally {
+        // Guaranteed Cleanup
+        try {
+          const checkRes = await fetch(testOrigin + `/api/vault/file?path=${encodeURIComponent(testFilePath)}`, {
+            headers: { Authorization: `Bearer ${user.token}` }
+          });
+          if (checkRes.status === 200) {
+            const checkData = await checkRes.json();
+            if (checkData.sha) {
+              await fetch(testOrigin + `/api/vault/file`, {
+                method: "DELETE",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${user.token}`
+                },
+                body: JSON.stringify({
+                  path: testFilePath,
+                  sha: checkData.sha
+                })
+              });
+            }
+          }
+        } catch {
+          // ignore cleanup errors to avoid masking main test failures
+        }
+      }
+    });
+
     return results;
   }
 }
