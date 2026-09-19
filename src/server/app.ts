@@ -578,7 +578,16 @@ async function githubStorageDeleteFile(filePath: string, sha: string, commitMsg:
 }
 
 const serverGitHubClient = {
-  getFile: githubStorageGet,
+  getFile: async (filePath: string) => {
+    try {
+      return await githubStorageGet(filePath);
+    } catch (err: any) {
+      if (err.status === 404 || err.message === "File not found") {
+        return null;
+      }
+      throw err;
+    }
+  },
   putFile: (path: string, content: string, commitMsg: string, expectedSha?: string) =>
     githubStoragePut(path, content, commitMsg, expectedSha),
   deleteDir: githubStorageDeleteDir,
@@ -863,10 +872,11 @@ app.post(["/api/vault/register", "/vault/register", "/register"], rateLimiter(10
 });
 
 // 2. POST /api/vault/auth-params
-app.post("/api/vault/auth-params", rateLimiter(30, 60000), async (req: Request, res: Response) => {
+// Also supports GET with ?username=...
+app.all("/api/vault/auth-params", rateLimiter(30, 60000), async (req: Request, res: Response) => {
   try {
-    const { username } = req.body;
-    if (!username) {
+    const username = req.method === "POST" ? req.body.username : req.query.username;
+    if (!username || typeof username !== "string") {
       return res.status(400).json({ error: "Invalid Request", message: "Username parameter is required." });
     }
 

@@ -6310,6 +6310,7 @@ async function githubStoragePut(filePath, contentStr, commitMsg, expectedSha) {
   const encodedPath = cleanPath.split("/").map(encodeURIComponent).join("/");
   if (pat) {
     const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodedPath}`;
+    console.log(`[GITHUB_STORAGE_PUT_START] Path: ${cleanPath}, URL: ${url}`);
     console.log(`[GITHUB_PUT_DEBUG] { owner: "${owner}", repo: "${repo}", branch: "${branch}", path: "${cleanPath}", url: "${url}" }`);
     let existingSha = void 0;
     try {
@@ -6395,9 +6396,11 @@ async function githubStorageGet(filePath) {
   const branch = getGitHubBranch();
   if (pat) {
     const url = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`;
+    console.log(`[GITHUB_STORAGE_GET_START] Path: ${filePath}, URL: ${url}`);
     const getRes = await fetch(url, {
       headers: getGitHubHeaders(pat)
     });
+    console.log(`[GITHUB_STORAGE_GET_RESPONSE] Path: ${filePath}, Status: ${getRes.status}`);
     if (getRes.status === 404) {
       throw { status: 404, message: "File not found" };
     }
@@ -6487,7 +6490,16 @@ async function githubStorageDeleteFile(filePath, sha, commitMsg) {
   }
 }
 var serverGitHubClient = {
-  getFile: githubStorageGet,
+  getFile: async (filePath) => {
+    try {
+      return await githubStorageGet(filePath);
+    } catch (err) {
+      if (err.status === 404 || err.message === "File not found") {
+        return null;
+      }
+      throw err;
+    }
+  },
   putFile: (path4, content, commitMsg, expectedSha) => githubStoragePut(path4, content, commitMsg, expectedSha),
   deleteDir: githubStorageDeleteDir
 };
@@ -6651,14 +6663,18 @@ app.post(["/api/vault/register", "/vault/register", "/register"], rateLimiter(10
     const usernameHash = crypto2.createHash("sha256").update(username.trim().toLowerCase()).digest("hex");
     const indexFilePath = `data/users_index/${usernameHash}.json`;
     const userFilePath = `data/users/${opaqueUserId}/account/auth-config.json`;
+    console.log(`[REGISTRATION_TRACE] Checking user index existence: ${indexFilePath}`);
     try {
-      await githubStorageGet(indexFilePath);
+      const indexFile = await githubStorageGet(indexFilePath);
+      console.log(`[REGISTRATION_TRACE] Index file found (SHA: ${indexFile.sha.substring(0, 8)}...). Duplicate user.`);
       return res.status(409).json({ error: "Duplicate User", message: "Username already exists." });
     } catch (err) {
+      console.log(`[REGISTRATION_TRACE] Index lookup result: status=${err.status}, message="${err.message}"`);
       if (err.status === 401 || err.status === 403) {
         return res.status(err.status).json({ error: "GitHub Storage Error", message: err.message });
       }
       if (err.status === 404 || err.message === "File not found") {
+        console.log(`[REGISTRATION_TRACE] Index file absent (404). Proceeding with new registration.`);
       } else if (err.status) {
         return res.status(err.status).json({ error: "GitHub Storage Error", message: err.message });
       } else {
@@ -6710,10 +6726,10 @@ app.post(["/api/vault/register", "/vault/register", "/register"], rateLimiter(10
     return res.status(500).json({ error: "Registration Failed", message: err.message || "Server error during registration." });
   }
 });
-app.post("/api/vault/auth-params", rateLimiter(30, 6e4), async (req, res) => {
+app.all("/api/vault/auth-params", rateLimiter(30, 6e4), async (req, res) => {
   try {
-    const { username } = req.body;
-    if (!username) {
+    const username = req.method === "POST" ? req.body.username : req.query.username;
+    if (!username || typeof username !== "string") {
       return res.status(400).json({ error: "Invalid Request", message: "Username parameter is required." });
     }
     const usernameHash = crypto2.createHash("sha256").update(username.trim().toLowerCase()).digest("hex");
