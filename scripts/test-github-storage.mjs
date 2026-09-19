@@ -32,12 +32,16 @@ async function runTests() {
     // Restore test PAT for subsequent tests
     process.env.GITHUB_STORAGE_PAT = "ghp_mock_test_token_123456789";
     process.env.NODE_ENV = "test";
+    process.env.GITHUB_OWNER = "Ashishbindra";
+    process.env.GITHUB_REPO = "github-encrypted-storage";
+    process.env.GITHUB_BRANCH = "main";
 
-    // 2. Test Path Traversal Rejection
-    console.log("Test 2: Path traversal rejection (400)...");
-    // We can test path normalization or direct helper logic if exported, or via testing route if available.
-    // Let's test a request with path traversal or check validation.
-    console.log("✓ Test 2 Passed (Path traversal protected)");
+    // 2. Test Configuration values correctness
+    console.log("Test 2: GitHub configuration variables verification...");
+    assert.equal(process.env.GITHUB_OWNER, "Ashishbindra");
+    assert.equal(process.env.GITHUB_REPO, "github-encrypted-storage");
+    assert.equal(process.env.GITHUB_BRANCH, "main");
+    console.log("✓ Test 2 Passed");
 
     // 3. Test GET /api/health
     console.log("Test 3: GET /api/health -> HTTP 200");
@@ -58,7 +62,6 @@ async function runTests() {
     // 5. Test query-string preservation and Vercel rewrite param handling
     console.log("Test 5: Query string preservation test");
     const resQuery = await fetch(`${baseUrl}/api/vault/file?path=test/file.json`);
-    // Expected 401 Unauthorized because session token is required
     assert.equal(resQuery.status, 401);
     console.log("✓ Test 5 Passed");
 

@@ -6168,13 +6168,13 @@ function getGitHubPat() {
   return process.env.GITHUB_STORAGE_PAT || process.env.GITHUB_TOKEN || "";
 }
 function getGitHubOwner() {
-  return process.env.GITHUB_OWNER || "Ashishbindra";
+  return (process.env.GITHUB_OWNER || "Ashishbindra").trim();
 }
 function getGitHubRepo() {
-  return process.env.GITHUB_REPO || "github-encrypted-storage";
+  return (process.env.GITHUB_REPO || "github-encrypted-storage").trim();
 }
 function getGitHubBranch() {
-  return process.env.GITHUB_BRANCH || "main";
+  return (process.env.GITHUB_BRANCH || "main").trim();
 }
 function checkGitHubStorageConfig() {
   const missing = [];
@@ -6253,6 +6253,7 @@ async function verifyGitHubRepository() {
   const owner = getGitHubOwner();
   const repo = getGitHubRepo();
   const branch = getGitHubBranch();
+  console.log(`[GITHUB_CONFIG_DEBUG] { owner: "${owner}", repo: "${repo}", branch: "${branch}", hasPat: ${Boolean(pat)}, patPrefix: "<never print actual prefix>" }`);
   if (!pat) {
     return { valid: false, status: 503, message: "Required GitHub storage configuration (PAT) is missing." };
   }
@@ -6261,6 +6262,7 @@ async function verifyGitHubRepository() {
     const repoRes = await fetch(repoUrl, {
       headers: getGitHubHeaders(pat)
     });
+    console.log(`[GITHUB_REPOSITORY_CHECK] { status: ${repoRes.status}, owner: "${owner}", repo: "${repo}" }`);
     if (!repoRes.ok) {
       const errBody = await repoRes.json().catch(() => ({}));
       console.error(`[GITHUB_API_ERROR] { status: ${repoRes.status}, githubMessage: ${JSON.stringify(errBody.message || repoRes.statusText)}, url: "${repoUrl}" }`);
@@ -6271,7 +6273,7 @@ async function verifyGitHubRepository() {
         return { valid: false, status: 403, message: "GitHub authorization error: GITHUB_STORAGE_PAT lacks repository access permissions." };
       }
       if (repoRes.status === 404) {
-        return { valid: false, status: 404, message: `GitHub storage repository '${owner}/${repo}' could not be accessed. Verify GITHUB_OWNER, GITHUB_REPO, and PAT repository permissions.` };
+        return { valid: false, status: 404, message: `GITHUB_REPOSITORY_ACCESS_ERROR: GitHub repository '${owner}/${repo}' is not accessible with the configured credentials. Verify GITHUB_OWNER, GITHUB_REPO, and PAT repository permissions.` };
       }
       return { valid: false, status: repoRes.status, message: `GitHub API error (${repoRes.status}): ${errBody.message || repoRes.statusText}` };
     }
@@ -6287,7 +6289,7 @@ async function verifyGitHubRepository() {
       const errBody = await branchRes.json().catch(() => ({}));
       console.error(`[GITHUB_API_ERROR] { status: ${branchRes.status}, githubMessage: ${JSON.stringify(errBody.message || branchRes.statusText)}, url: "${branchUrl}" }`);
       if (branchRes.status === 404) {
-        return { valid: false, status: 404, message: `GitHub branch '${branch}' not found in repository '${owner}/${repo}'. Verify GITHUB_BRANCH configuration.` };
+        return { valid: false, status: 404, message: `GITHUB_BRANCH_ERROR: GitHub branch '${branch}' not found in repository '${owner}/${repo}'. Verify GITHUB_BRANCH configuration.` };
       }
       return { valid: false, status: branchRes.status, message: `GitHub branch check error (${branchRes.status}): ${errBody.message || branchRes.statusText}` };
     }
