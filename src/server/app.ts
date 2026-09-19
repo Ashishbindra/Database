@@ -56,8 +56,16 @@ app.use((req: Request, _res: Response, next: NextFunction) => {
   if (originalUrl && typeof originalUrl === "string") {
     req.url = originalUrl;
   }
+  if (req.url.startsWith("/vault/") || req.url === "/health" || req.url.startsWith("/testing/")) {
+    req.url = "/api" + req.url;
+  }
   next();
 });
+
+// Production environment detection
+function isProductionRuntime(): boolean {
+  return Boolean(process.env.VERCEL || process.env.NODE_ENV === "production");
+}
 
 // Security Configurations (evaluated dynamically for environment changes)
 function getSessionSecret(): string {
@@ -69,15 +77,31 @@ function getGitHubPat(): string {
 }
 
 function getGitHubOwner(): string {
-  return process.env.GITHUB_OWNER || "demo-org";
+  return process.env.GITHUB_OWNER || "Ashishbindra";
 }
 
 function getGitHubRepo(): string {
-  return process.env.GITHUB_REPO || "encrypted-vault-storage";
+  return process.env.GITHUB_REPO || "github-encrypted-storage";
 }
 
 function getGitHubBranch(): string {
   return process.env.GITHUB_BRANCH || "main";
+}
+
+function checkGitHubStorageConfig(): { valid: boolean; missing: string[] } {
+  const missing: string[] = [];
+  if (!getGitHubPat()) missing.push("GITHUB_STORAGE_PAT");
+  return { valid: missing.length === 0, missing };
+}
+
+function getGitHubHeaders(pat: string) {
+  return {
+    Authorization: `Bearer ${pat}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "Content-Type": "application/json",
+    "User-Agent": "github-encrypted-storage",
+  };
 }
 
 // Rate Limiting & Session Storage
@@ -181,17 +205,18 @@ async function githubStoragePut(filePath: string, contentStr: string, commitMsg:
     let existingSha: string | undefined = undefined;
     try {
       const getRes = await fetch(url + `?ref=${branch}`, {
-        headers: {
-          Authorization: `token ${pat}`,
-          Accept: "application/vnd.github.v3+json",
-          "User-Agent": "EncryptedVaultSDK-Server",
-        },
+        headers: getGitHubHeaders(pat),
       });
       if (getRes.ok) {
         const data = await getRes.json();
         existingSha = data.sha;
+      } else if (getRes.status === 401) {
+        throw { status: 401, message: "GitHub authentication error: GITHUB_STORAGE_PAT invalid or expired." };
+      } else if (getRes.status === 403) {
+        throw { status: 403, message: "GitHub authorization error: GITHUB_STORAGE_PAT lacks repository write permissions." };
       }
-    } catch {
+    } catch (e: any) {
+      if (e.status) throw e;
       // File does not exist yet
     }
 
@@ -211,17 +236,22 @@ async function githubStoragePut(filePath: string, contentStr: string, commitMsg:
 
     const putRes = await fetch(url, {
       method: "PUT",
-      headers: {
-        Authorization: `token ${pat}`,
-        Accept: "application/vnd.github.v3+json",
-        "Content-Type": "application/json",
-        "User-Agent": "EncryptedVaultSDK-Server",
-      },
+      headers: getGitHubHeaders(pat),
       body: JSON.stringify(bodyObj),
     });
 
     if (putRes.status === 409) {
       throw { status: 409, message: "409 Conflict: Remote version updated concurrently on GitHub." };
+    }
+    if (putRes.status === 401) {
+      throw { status: 401, message: "GitHub authentication error: GITHUB_STORAGE_PAT invalid or expired." };
+    }
+    if (putRes.status === 403) {
+      throw { status: 403, message: "GitHub authorization error: GITHUB_STORAGE_PAT lacks repository write permissions." };
+    }
+    if (putRes.status === 422) {
+      const errJson = await putRes.json().catch(() => ({}));
+      throw { status: 422, message: `GitHub API error (422): ${errJson.message || "Invalid repository or branch configuration."}` };
     }
 
     if (!putRes.ok) {
@@ -232,7 +262,10 @@ async function githubStoragePut(filePath: string, contentStr: string, commitMsg:
     const resData = await putRes.json();
     return { sha: resData.content.sha };
   } else {
-    // Zero-cost local memory vault fallback
+    // Fail immediately in production - no silent in-memory fallback!
+    if (isProductionRuntime()) {
+      throw { status: 503, error: "CONFIGURATION_ERROR", message: "Required GitHub storage configuration is missing." };
+    }
     if (expectedSha !== undefined) {
       const entry = serverLocalVault.get(filePath);
       const currentSha = entry ? entry.sha : undefined;
@@ -255,15 +288,17 @@ async function githubStorageGet(filePath: string): Promise<{ content: string; sh
   if (pat) {
     const url = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`;
     const getRes = await fetch(url, {
-      headers: {
-        Authorization: `token ${pat}`,
-        Accept: "application/vnd.github.v3+json",
-        "User-Agent": "EncryptedVaultSDK-Server",
-      },
+      headers: getGitHubHeaders(pat),
     });
 
     if (getRes.status === 404) {
       throw { status: 404, message: "File not found" };
+    }
+    if (getRes.status === 401) {
+      throw { status: 401, message: "GitHub authentication error: GITHUB_STORAGE_PAT invalid or expired." };
+    }
+    if (getRes.status === 403) {
+      throw { status: 403, message: "GitHub authorization error: GITHUB_STORAGE_PAT lacks repository read permissions." };
     }
 
     if (!getRes.ok) {
@@ -274,6 +309,9 @@ async function githubStorageGet(filePath: string): Promise<{ content: string; sh
     const content = Buffer.from(data.content, "base64").toString("utf8");
     return { content, sha: data.sha };
   } else {
+    if (isProductionRuntime()) {
+      throw { status: 503, error: "CONFIGURATION_ERROR", message: "Required GitHub storage configuration is missing." };
+    }
     const entry = serverLocalVault.get(filePath);
     if (!entry) {
       throw { status: 404, message: "File not found" };
@@ -313,21 +351,21 @@ async function githubStorageDeleteFile(filePath: string, sha: string, commitMsg:
 
     const delRes = await fetch(url, {
       method: "DELETE",
-      headers: {
-        Authorization: `token ${pat}`,
-        Accept: "application/vnd.github.v3+json",
-        "Content-Type": "application/json",
-        "User-Agent": "EncryptedVaultSDK-Server",
-      },
+      headers: getGitHubHeaders(pat),
       body: JSON.stringify(bodyObj),
     });
 
     if (delRes.status === 409) {
       throw { status: 409, message: "409 Conflict: Remote version updated concurrently on GitHub." };
     }
-
     if (delRes.status === 404) {
       throw { status: 404, message: "File not found on GitHub." };
+    }
+    if (delRes.status === 401) {
+      throw { status: 401, message: "GitHub authentication error: GITHUB_STORAGE_PAT invalid or expired." };
+    }
+    if (delRes.status === 403) {
+      throw { status: 403, message: "GitHub authorization error: GITHUB_STORAGE_PAT lacks repository write permissions." };
     }
 
     if (!delRes.ok) {
@@ -337,6 +375,9 @@ async function githubStorageDeleteFile(filePath: string, sha: string, commitMsg:
 
     return true;
   } else {
+    if (isProductionRuntime()) {
+      throw { status: 503, error: "CONFIGURATION_ERROR", message: "Required GitHub storage configuration is missing." };
+    }
     if (!serverLocalVault.has(filePath)) {
       throw { status: 404, message: "File not found locally." };
     }
@@ -362,12 +403,14 @@ let _freshnessLedger: FreshnessLedger | null = null;
 
 function getActiveSessionStore(): SessionStore {
   if (!_sessionStore) {
-    try {
-      _sessionStore = getSessionStore(serverGitHubClient);
-    } catch (err: any) {
-      console.error("[INIT] Failed to init SessionStore:", err.message);
-      // Fallback: return an in-memory store if distributed fails
+    const pat = getGitHubPat();
+    if (!pat) {
+      if (isProductionRuntime()) {
+        throw { status: 503, error: "CONFIGURATION_ERROR", message: "Required GitHub storage configuration is missing." };
+      }
       _sessionStore = new InMemorySessionStore();
+    } else {
+      _sessionStore = new GitHubDistributedSessionStore(serverGitHubClient);
     }
   }
   return _sessionStore;
@@ -375,12 +418,14 @@ function getActiveSessionStore(): SessionStore {
 
 function getActiveFreshnessLedger(): FreshnessLedger {
   if (!_freshnessLedger) {
-    try {
-      _freshnessLedger = getFreshnessLedger(serverGitHubClient);
-    } catch (err: any) {
-      console.error("[INIT] Failed to init FreshnessLedger:", err.message);
-      // Fallback: return an in-memory ledger if distributed fails
+    const pat = getGitHubPat();
+    if (!pat) {
+      if (isProductionRuntime()) {
+        throw { status: 503, error: "CONFIGURATION_ERROR", message: "Required GitHub storage configuration is missing." };
+      }
       _freshnessLedger = new InMemoryFreshnessLedger();
+    } else {
+      _freshnessLedger = new GitHubDistributedFreshnessLedger(serverGitHubClient);
     }
   }
   return _freshnessLedger;
@@ -502,28 +547,44 @@ export const activeLoginChallenges = new Map<string, LoginChallenge>();
 
 // Diagnostic health endpoints - independent of storage or auth initialization
 app.get("/api/health", (_req: Request, res: Response) => {
-  return res.json({
+  return res.status(200).json({
     ok: true,
-    runtime: process.env.VERCEL ? "vercel" : "express",
-    storageProvider: getGitHubPat() ? "github" : "local-memory",
     status: "healthy",
-    timestamp: new Date().toISOString(),
   });
 });
 
 app.get("/health", (_req: Request, res: Response) => {
-  return res.json({
+  return res.status(200).json({
     ok: true,
-    runtime: process.env.VERCEL ? "vercel" : "express",
-    storageProvider: getGitHubPat() ? "github" : "local-memory",
     status: "healthy",
-    timestamp: new Date().toISOString(),
   });
+});
+
+// Enforce GitHub storage configuration in production for all /api/vault routes
+app.use("/api/vault", (_req: Request, res: Response, next: NextFunction) => {
+  if (isProductionRuntime()) {
+    const config = checkGitHubStorageConfig();
+    if (!config.valid) {
+      return res.status(503).json({
+        error: "CONFIGURATION_ERROR",
+        message: "Required GitHub storage configuration is missing.",
+      });
+    }
+  }
+  next();
 });
 
 // 1. POST /api/vault/register
 app.post("/api/vault/register", rateLimiter(10, 60000), async (req: Request, res: Response) => {
   try {
+    const config = checkGitHubStorageConfig();
+    if (isProductionRuntime() && !config.valid) {
+      return res.status(503).json({
+        error: "CONFIGURATION_ERROR",
+        message: "Required GitHub storage configuration is missing.",
+      });
+    }
+
     const { username, opaqueUserId, saltHex, authProofHash, wrappedDek, recoveryWrappedDek } = req.body;
 
     if (!username || !opaqueUserId || !saltHex || !authProofHash || !wrappedDek) {
@@ -987,6 +1048,13 @@ app.get("/api/vault/tree", requireAuth, async (req: Request, res: Response) => {
   console.log("[TREE API] branch:", branch);
 
   if (!pat) {
+    if (isProductionRuntime()) {
+      return res.status(503).json({
+        error: "CONFIGURATION_ERROR",
+        message: "Required GitHub storage configuration is missing.",
+        missing: ["GITHUB_STORAGE_PAT"],
+      });
+    }
     // Return mock tree listing based on active local simulation
     const localKeys = Array.from(serverLocalVault.keys());
     const mockTree = localKeys.map((k) => ({
@@ -1000,30 +1068,27 @@ app.get("/api/vault/tree", requireAuth, async (req: Request, res: Response) => {
 
   const url = `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`;
 
-  console.log("--- GitHub API Tree Request ---");
-  console.log(`Request Path: ${req.path}`);
-  console.log(`Authenticated User: ${username}`);
-  console.log(`GitHub API URL: ${url}`);
-  console.log(`Repository Owner: ${owner}`);
-  console.log(`Repository Name: ${repo}`);
-  console.log(`Branch: ${branch}`);
-
   try {
     const gitRes = await fetch(url, {
-      headers: {
-        Authorization: `token ${pat}`,
-        Accept: "application/vnd.github.v3+json",
-        "User-Agent": "EncryptedVaultSDK-Server",
-      },
+      headers: getGitHubHeaders(pat),
     });
 
-    console.log(`GitHub response status: ${gitRes.status}`);
+    if (gitRes.status === 401) {
+      return res.status(401).json({
+        error: "GitHub authentication error",
+        message: "GITHUB_STORAGE_PAT invalid or expired.",
+      });
+    }
+    if (gitRes.status === 403) {
+      return res.status(403).json({
+        error: "GitHub authorization error",
+        message: "GITHUB_STORAGE_PAT lacks repo read permissions.",
+      });
+    }
 
     if (!gitRes.ok) {
       const errJson = await gitRes.json().catch(() => ({}));
       const errMsg = errJson.message || gitRes.statusText;
-      console.error(`GitHub API Request failed: HTTP ${gitRes.status}`);
-      console.error(`GitHub response body for error:`, JSON.stringify(errJson));
       return res.status(gitRes.status).json({
         error: "GitHub API Error",
         message: `Failed to fetch tree from GitHub: ${errMsg}`,
@@ -1221,14 +1286,6 @@ app.post("/api/testing/run", async (req: Request, res: Response) => {
   } catch (err: any) {
     return res.status(500).json({ error: "Testing Failed", message: err.message });
   }
-});
-
-// Diagnostic health endpoints for uptime and serverless verification
-app.get("/api/health", (_req: Request, res: Response) => {
-  return res.json({ ok: true, status: "healthy", timestamp: new Date().toISOString() });
-});
-app.get("/health", (_req: Request, res: Response) => {
-  return res.json({ ok: true, status: "healthy", timestamp: new Date().toISOString() });
 });
 
 // Guarantee that any unhandled /api/* requests never fall through to index.html/Vite middlewares

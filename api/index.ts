@@ -13,18 +13,21 @@ export default function handler(req: IncomingMessage, res: ServerResponse) {
     req.url = originalUrl;
   }
 
+  // Ensure leading /api prefix is preserved for Express routes if stripped by Vercel
+  if (req.url && !req.url.startsWith("/api") && !req.url.startsWith("/index.html")) {
+    req.url = "/api" + (req.url.startsWith("/") ? req.url : "/" + req.url);
+  }
+
   const cleanUrl = (req.url || "").split("?")[0];
 
-  // Critical Rule: Health endpoint MUST NOT require storage or complex initialization
-  if (cleanUrl === "/api/health" || cleanUrl === "/health") {
+  // Critical Rule: Health endpoint MUST NOT require storage, database, PAT, or complex initialization
+  if (cleanUrl === "/api/health" || cleanUrl === "/health" || cleanUrl.endsWith("/health")) {
     res.statusCode = 200;
     res.setHeader("Content-Type", "application/json");
     res.end(
       JSON.stringify({
         ok: true,
-        runtime: "vercel",
         status: "healthy",
-        timestamp: new Date().toISOString(),
       })
     );
     return;

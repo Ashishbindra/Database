@@ -93,7 +93,9 @@ export interface SessionStore {
   cleanupExpiredSessions?(): Promise<number>;
 }
 
-const SESSION_SECRET = (typeof process !== "undefined" && process.env && process.env.SESSION_SECRET) || "default_session_secret_change_in_prod";
+function getSessionSecret(): string {
+  return (typeof process !== "undefined" && process.env && process.env.SESSION_SECRET) || "default_session_secret_change_in_prod";
+}
 
 /**
  * 1. InMemorySessionStore - Fast in-memory session store for ephemeral dev/testing
@@ -109,7 +111,7 @@ export class InMemorySessionStore implements SessionStore {
 
     const session: Session = { sessionId, opaqueUserId, issuedAt, expiresAt };
     const payload = JSON.stringify(session);
-    const hmac = generateHmacHex(SESSION_SECRET, payload);
+    const hmac = generateHmacHex(getSessionSecret(), payload);
     const token = stringToBase64Url(payload) + "." + hmac;
 
     this.activeSessions.set(sessionId, session);
@@ -123,7 +125,7 @@ export class InMemorySessionStore implements SessionStore {
 
     try {
       const payloadStr = base64UrlToString(parts[0]);
-      const expectedHmac = generateHmacHex(SESSION_SECRET, payloadStr);
+      const expectedHmac = generateHmacHex(getSessionSecret(), payloadStr);
 
       if (!safeCompare(parts[1], expectedHmac)) {
         return null;
@@ -243,7 +245,7 @@ export class FileSessionStore implements SessionStore {
 
     const session: Session = { sessionId, opaqueUserId, issuedAt, expiresAt };
     const payload = JSON.stringify(session);
-    const hmac = generateHmacHex(SESSION_SECRET, payload);
+    const hmac = generateHmacHex(getSessionSecret(), payload);
     const token = stringToBase64Url(payload) + "." + hmac;
 
     store.sessions[sessionId] = session;
@@ -259,7 +261,7 @@ export class FileSessionStore implements SessionStore {
 
     try {
       const payloadStr = base64UrlToString(parts[0]);
-      const expectedHmac = generateHmacHex(SESSION_SECRET, payloadStr);
+      const expectedHmac = generateHmacHex(getSessionSecret(), payloadStr);
 
       if (!safeCompare(parts[1], expectedHmac)) {
         return null;
@@ -363,7 +365,7 @@ export class GitHubDistributedSessionStore implements SessionStore {
     await this.githubStorageClient.putFile("sessions/active.json", JSON.stringify(data), "Create session");
 
     const payload = JSON.stringify(session);
-    const hmac = generateHmacHex(SESSION_SECRET, payload);
+    const hmac = generateHmacHex(getSessionSecret(), payload);
     const token = stringToBase64Url(payload) + "." + hmac;
 
     return { token, session };
@@ -376,7 +378,7 @@ export class GitHubDistributedSessionStore implements SessionStore {
 
     try {
       const payloadStr = base64UrlToString(parts[0]);
-      const expectedHmac = generateHmacHex(SESSION_SECRET, payloadStr);
+      const expectedHmac = generateHmacHex(getSessionSecret(), payloadStr);
 
       if (!safeCompare(parts[1], expectedHmac)) {
         return null;
