@@ -6248,16 +6248,70 @@ function rateLimiter(maxRequests = 60, windowMs = 6e4) {
     next();
   };
 }
+async function verifyGitHubRepository() {
+  const pat = getGitHubPat();
+  const owner = getGitHubOwner();
+  const repo = getGitHubRepo();
+  const branch = getGitHubBranch();
+  if (!pat) {
+    return { valid: false, status: 503, message: "Required GitHub storage configuration (PAT) is missing." };
+  }
+  const repoUrl = `https://api.github.com/repos/${owner}/${repo}`;
+  try {
+    const repoRes = await fetch(repoUrl, {
+      headers: getGitHubHeaders(pat)
+    });
+    if (!repoRes.ok) {
+      const errBody = await repoRes.json().catch(() => ({}));
+      console.error(`[GITHUB_API_ERROR] { status: ${repoRes.status}, githubMessage: ${JSON.stringify(errBody.message || repoRes.statusText)}, url: "${repoUrl}" }`);
+      if (repoRes.status === 401) {
+        return { valid: false, status: 401, message: "GitHub authentication error: GITHUB_STORAGE_PAT invalid or expired." };
+      }
+      if (repoRes.status === 403) {
+        return { valid: false, status: 403, message: "GitHub authorization error: GITHUB_STORAGE_PAT lacks repository access permissions." };
+      }
+      if (repoRes.status === 404) {
+        return { valid: false, status: 404, message: `GitHub storage repository '${owner}/${repo}' could not be accessed. Verify GITHUB_OWNER, GITHUB_REPO, and PAT repository permissions.` };
+      }
+      return { valid: false, status: repoRes.status, message: `GitHub API error (${repoRes.status}): ${errBody.message || repoRes.statusText}` };
+    }
+  } catch (err) {
+    return { valid: false, status: 502, message: `Failed to connect to GitHub API: ${err.message}` };
+  }
+  const branchUrl = `https://api.github.com/repos/${owner}/${repo}/branches/${branch}`;
+  try {
+    const branchRes = await fetch(branchUrl, {
+      headers: getGitHubHeaders(pat)
+    });
+    if (!branchRes.ok) {
+      const errBody = await branchRes.json().catch(() => ({}));
+      console.error(`[GITHUB_API_ERROR] { status: ${branchRes.status}, githubMessage: ${JSON.stringify(errBody.message || branchRes.statusText)}, url: "${branchUrl}" }`);
+      if (branchRes.status === 404) {
+        return { valid: false, status: 404, message: `GitHub branch '${branch}' not found in repository '${owner}/${repo}'. Verify GITHUB_BRANCH configuration.` };
+      }
+      return { valid: false, status: branchRes.status, message: `GitHub branch check error (${branchRes.status}): ${errBody.message || branchRes.statusText}` };
+    }
+  } catch (err) {
+    return { valid: false, status: 502, message: `Failed to connect to GitHub branch API: ${err.message}` };
+  }
+  return { valid: true, status: 200, message: "Repository and branch verified successfully." };
+}
 async function githubStoragePut(filePath, contentStr, commitMsg, expectedSha) {
   const pat = getGitHubPat();
   const owner = getGitHubOwner();
   const repo = getGitHubRepo();
   const branch = getGitHubBranch();
+  const cleanPath = filePath.replace(/^\/+/, "");
+  if (cleanPath.includes("..") || cleanPath.includes("\0")) {
+    throw { status: 400, message: "Path traversal violation detected." };
+  }
+  const encodedPath = cleanPath.split("/").map(encodeURIComponent).join("/");
   if (pat) {
-    const url = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`;
+    const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodedPath}`;
+    console.log(`[GITHUB_PUT_DEBUG] { owner: "${owner}", repo: "${repo}", branch: "${branch}", path: "${cleanPath}", url: "${url}" }`);
     let existingSha = void 0;
     try {
-      const getRes = await fetch(url + `?ref=${branch}`, {
+      const getRes = await fetch(url + `?ref=${encodeURIComponent(branch)}`, {
         headers: getGitHubHeaders(pat)
       });
       if (getRes.ok) {
@@ -6267,6 +6321,9 @@ async function githubStoragePut(filePath, contentStr, commitMsg, expectedSha) {
         throw { status: 401, message: "GitHub authentication error: GITHUB_STORAGE_PAT invalid or expired." };
       } else if (getRes.status === 403) {
         throw { status: 403, message: "GitHub authorization error: GITHUB_STORAGE_PAT lacks repository write permissions." };
+      } else if (getRes.status !== 404) {
+        const errJson = await getRes.json().catch(() => ({}));
+        console.error(`[GITHUB_API_ERROR] { status: ${getRes.status}, githubMessage: ${JSON.stringify(errJson.message || getRes.statusText)}, url: "${url}" }`);
       }
     } catch (e) {
       if (e.status) throw e;
@@ -6296,12 +6353,19 @@ async function githubStoragePut(filePath, contentStr, commitMsg, expectedSha) {
     if (putRes.status === 403) {
       throw { status: 403, message: "GitHub authorization error: GITHUB_STORAGE_PAT lacks repository write permissions." };
     }
+    if (putRes.status === 404) {
+      const errJson = await putRes.json().catch(() => ({}));
+      console.error(`[GITHUB_API_ERROR] { status: 404, githubMessage: ${JSON.stringify(errJson.message || putRes.statusText)}, url: "${url}" }`);
+      throw { status: 404, message: `GitHub storage repository or branch not found (${owner}/${repo} @ ${branch}). Verify GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH and PAT access.` };
+    }
     if (putRes.status === 422) {
       const errJson = await putRes.json().catch(() => ({}));
-      throw { status: 422, message: `GitHub API error (422): ${errJson.message || "Invalid repository or branch configuration."}` };
+      console.error(`[GITHUB_API_ERROR] { status: 422, githubMessage: ${JSON.stringify(errJson.message || putRes.statusText)}, url: "${url}" }`);
+      throw { status: 422, message: `GitHub API error (422): ${errJson.message || "Invalid repository, branch, or SHA configuration."}` };
     }
     if (!putRes.ok) {
       const errJson = await putRes.json().catch(() => ({}));
+      console.error(`[GITHUB_API_ERROR] { status: ${putRes.status}, githubMessage: ${JSON.stringify(errJson.message || putRes.statusText)}, url: "${url}" }`);
       throw new Error(`GitHub PUT API Error ${putRes.status}: ${errJson.message || putRes.statusText}`);
     }
     const resData = await putRes.json();
@@ -6311,14 +6375,14 @@ async function githubStoragePut(filePath, contentStr, commitMsg, expectedSha) {
       throw { status: 503, error: "CONFIGURATION_ERROR", message: "Required GitHub storage configuration is missing." };
     }
     if (expectedSha !== void 0) {
-      const entry = serverLocalVault.get(filePath);
+      const entry = serverLocalVault.get(cleanPath);
       const currentSha = entry ? entry.sha : void 0;
       if (currentSha !== expectedSha) {
         throw { status: 409, message: "409 Conflict: Remote version updated concurrently." };
       }
     }
     const sha = crypto2.createHash("sha256").update(contentStr).digest("hex");
-    serverLocalVault.set(filePath, { content: contentStr, sha, updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
+    serverLocalVault.set(cleanPath, { content: contentStr, sha, updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
     return { sha };
   }
 }
@@ -6572,6 +6636,15 @@ app.post(["/api/vault/register", "/vault/register", "/register"], rateLimiter(10
     const { username, opaqueUserId, saltHex, authProofHash, wrappedDek, recoveryWrappedDek } = req.body;
     if (!username || !opaqueUserId || !saltHex || !authProofHash || !wrappedDek) {
       return res.status(400).json({ error: "Invalid Request", message: "Missing required registration parameters." });
+    }
+    if (isProductionRuntime()) {
+      const repoCheck = await verifyGitHubRepository();
+      if (!repoCheck.valid) {
+        return res.status(repoCheck.status).json({
+          error: "GitHub Storage Error",
+          message: repoCheck.message
+        });
+      }
     }
     const usernameHash = crypto2.createHash("sha256").update(username.trim().toLowerCase()).digest("hex");
     const indexFilePath = `data/users_index/${usernameHash}.json`;
