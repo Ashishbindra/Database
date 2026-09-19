@@ -108,6 +108,8 @@ export class AuthManager {
     this.keyManager.setActiveSession(opaqueUserId, dek);
     this.currentUserProfile = profile;
 
+    await this.saveActiveSessionToCache(opaqueUserId, dek, profile);
+
     return { profile, recoveryWords, sessionToken: this.sessionToken! };
   }
 
@@ -178,6 +180,8 @@ export class AuthManager {
     // 5. Unlock Session
     this.keyManager.setActiveSession(opaqueUserId, dek);
     this.currentUserProfile = profile;
+
+    await this.saveActiveSessionToCache(opaqueUserId, dek, profile);
 
     return profile;
   }
@@ -251,6 +255,8 @@ export class AuthManager {
     this.keyManager.setActiveSession(opaqueUserId, dek);
     this.currentUserProfile = profile;
 
+    await this.saveActiveSessionToCache(opaqueUserId, dek, profile);
+
     return profile;
   }
 
@@ -300,5 +306,59 @@ export class AuthManager {
 
     await this.logout();
     return true;
+  }
+
+  private async saveActiveSessionToCache(userId: string, dek: CryptoKey, profile: UserProfileRemote): Promise<void> {
+    try {
+      await this.localDb.saveUserCache("active_session", {
+        userId: "active_session",
+        activeUserId: userId,
+        activeDek: dek,
+        profile,
+        sessionToken: this.sessionToken,
+      });
+    } catch (err) {
+      console.error("Failed to save active session to IndexedDB user_cache:", err);
+    }
+  }
+
+  // Restore Active Session from Cache
+  public async restoreSessionFromCache(): Promise<boolean> {
+    try {
+      const cached = await this.localDb.getUserCache("active_session");
+      if (!cached || !cached.sessionToken || !cached.activeDek || !cached.profile) {
+        return false;
+      }
+
+      // Verify the session on the server via GET /api/vault/session
+      const res = await fetch(getApiUrl("/api/vault/session"), {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${cached.sessionToken}`,
+        },
+      });
+
+      if (!res.ok) {
+        // If the server rejected the session (expired or invalid), clean up
+        await this.logout();
+        return false;
+      }
+
+      const resData = await res.json();
+      if (!resData.authenticated) {
+        await this.logout();
+        return false;
+      }
+
+      // Re-hydrate the active state!
+      this.sessionToken = cached.sessionToken;
+      this.currentUserProfile = cached.profile;
+      this.keyManager.setActiveSession(cached.activeUserId, cached.activeDek);
+
+      return true;
+    } catch (err) {
+      console.error("Failed to restore active session from cache:", err);
+      return false;
+    }
   }
 }

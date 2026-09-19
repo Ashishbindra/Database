@@ -237,4 +237,39 @@ export class IndexedDBStorage {
       req.onerror = () => reject(req.error);
     });
   }
+
+  // --- USER CACHE / SESSION OPERATIONS ---
+
+  public async saveUserCache(userId: string, data: any): Promise<void> {
+    if (this.isMemoryMode) {
+      this.memoryUserCache.set(userId, { ...data, userId });
+      return;
+    }
+
+    const db = this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(["user_cache"], "readwrite");
+      const store = tx.objectStore("user_cache");
+      const req = store.put({ ...data, userId });
+
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  public async getUserCache(userId: string): Promise<any | null> {
+    if (this.isMemoryMode) {
+      return this.memoryUserCache.get(userId) || null;
+    }
+
+    const db = this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(["user_cache"], "readonly");
+      const store = tx.objectStore("user_cache");
+      const req = store.get(userId);
+
+      req.onsuccess = () => resolve(req.result ? req.result : null);
+      req.onerror = () => reject(req.error);
+    });
+  }
 }

@@ -44,6 +44,11 @@ export class CentralDataClient {
   public async init(): Promise<void> {
     if (this.isInitialized) return;
     await this.localDb.init();
+    try {
+      await this.authManager.restoreSessionFromCache();
+    } catch (err) {
+      console.error("Session restoration failed during SDK init:", err);
+    }
     this.isInitialized = true;
   }
 

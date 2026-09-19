@@ -92,11 +92,29 @@ export const freshnessLedger: FreshnessLedger = getFreshnessLedger();
 
 // Session Auth Middleware
 async function requireAuth(req: Request, res: Response, next: NextFunction) {
+  let token = "";
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "Unauthorized", message: "Missing or malformed Authorization header." });
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    token = authHeader.substring(7).trim();
+  } else {
+    // Fallback to cookie check
+    const cookieHeader = req.headers.cookie;
+    if (cookieHeader) {
+      const cookies: Record<string, string> = {};
+      cookieHeader.split(";").forEach((cookie) => {
+        const parts = cookie.split("=");
+        if (parts.length >= 2) {
+          cookies[parts[0].trim()] = parts.slice(1).join("=").trim();
+        }
+      });
+      token = cookies["sessionToken"] || "";
+    }
   }
-  const token = authHeader.substring(7).trim();
+
+  if (!token) {
+    return res.status(401).json({ error: "Unauthorized", message: "Missing or malformed Authorization header or session cookie." });
+  }
+
   try {
     const session = await sessionStore.validateSession(token);
     if (!session) {
@@ -257,6 +275,13 @@ app.post("/api/vault/register", rateLimiter(10, 60000), async (req: Request, res
     await githubStoragePut(userFilePath, JSON.stringify(authConfig), "Vault Account Config Initialized");
 
     const { token: sessionToken } = await sessionStore.createSession(opaqueUserId);
+    res.cookie("sessionToken", sessionToken, {
+      httpOnly: true,
+      secure: req.secure || req.headers["x-forwarded-proto"] === "https",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+    });
     return res.json({
       success: true,
       opaqueUserId,
@@ -377,6 +402,13 @@ app.post("/api/vault/login", rateLimiter(15, 60000), async (req: Request, res: R
     }
 
     const { token: sessionToken } = await sessionStore.createSession(opaqueUserId);
+    res.cookie("sessionToken", sessionToken, {
+      httpOnly: true,
+      secure: req.secure || req.headers["x-forwarded-proto"] === "https",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+    });
     return res.json({
       success: true,
       opaqueUserId,
@@ -394,6 +426,10 @@ app.post("/api/vault/login", rateLimiter(15, 60000), async (req: Request, res: R
 app.post("/api/vault/logout", requireAuth, async (req: Request, res: Response) => {
   const session = (req as any).session as Session;
   await sessionStore.revokeSession(session.sessionId);
+  res.clearCookie("sessionToken", {
+    path: "/",
+    sameSite: "lax",
+  });
   return res.json({ success: true, message: "Session revoked successfully." });
 });
 
