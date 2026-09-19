@@ -1,7 +1,6 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import pg from "pg";
 
 // Helper to convert string to base64url safely without Node Buffer
 function stringToBase64Url(str: string): string {
@@ -329,73 +328,31 @@ export class FileSessionStore implements SessionStore {
   }
 }
 
+
 /**
- * 3. DatabaseDistributedSessionStore - Production shared backend session store (e.g. PostgreSQL)
- * Fails closed if database backend is unconfigured or unreachable in production.
+ * 3. GitHubDistributedSessionStore - Persistent shared backend session store backed by GitHub
+ * Fails closed if GitHub backend is unconfigured or unreachable.
  */
-export class DatabaseDistributedSessionStore implements SessionStore {
-  private pgPool: pg.Pool | null = null;
-  private dbInitialized = false;
-
-  constructor(private dbUrlOrPool?: string | pg.Pool) {
-    if (typeof dbUrlOrPool === "object" && dbUrlOrPool !== null) {
-      this.pgPool = dbUrlOrPool as pg.Pool;
-    } else {
-      const url = (typeof dbUrlOrPool === "string" ? dbUrlOrPool : undefined) || (typeof process !== "undefined" && process.env ? process.env.DATABASE_URL : undefined);
-      if (url && (url.startsWith("postgres://") || url.startsWith("postgresql://"))) {
-        this.pgPool = new pg.Pool({ connectionString: url, max: 10 });
-      }
-    }
-  }
-
-  private async ensurePgTable(): Promise<pg.Pool> {
-    if (!this.pgPool) {
-      throw new Error(
-        "DISTRIBUTED_SESSION_STORE_UNAVAILABLE: DATABASE_URL environment variable is required for distributed session store."
-      );
-    }
-    if (!this.dbInitialized) {
-      try {
-        await this.pgPool.query(`
-          CREATE TABLE IF NOT EXISTS sessions (
-            session_id text primary key,
-            opaque_user_id text,
-            issued_at bigint,
-            expires_at bigint,
-            revoked boolean
-          )
-        `);
-        await this.pgPool.query(`CREATE INDEX IF NOT EXISTS idx_sessions_opaque_user ON sessions(opaque_user_id)`);
-        await this.pgPool.query(`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`);
-        this.dbInitialized = true;
-      } catch (err) {
-        throw new Error(
-          `DISTRIBUTED_SESSION_STORE_UNAVAILABLE: Failed to initialize PostgreSQL session tables: ${(err as Error).message}`
-        );
-      }
-    }
-    return this.pgPool;
-  }
+export class GitHubDistributedSessionStore implements SessionStore {
+  constructor(private githubStorageClient: any) {}
 
   public async createSession(opaqueUserId: string): Promise<{ token: string; session: Session }> {
-    const pool = await this.ensurePgTable();
     const sessionId = generateRandomHex(16);
     const issuedAt = Date.now();
     const expiresAt = issuedAt + 24 * 60 * 60 * 1000;
 
     const session: Session = { sessionId, opaqueUserId, issuedAt, expiresAt };
+    
+    // Fetch existing
+    const file = await this.githubStorageClient.getFile("sessions/active.json") || { content: JSON.stringify({sessions: {}}), sha: undefined };
+    const data = JSON.parse(file.content);
+    data.sessions[sessionId] = session;
+    
+    await this.githubStorageClient.putFile("sessions/active.json", JSON.stringify(data), "Create session");
+
     const payload = JSON.stringify(session);
     const hmac = generateHmacHex(SESSION_SECRET, payload);
     const token = stringToBase64Url(payload) + "." + hmac;
-
-    try {
-      await pool.query(
-        "INSERT INTO sessions (session_id, opaque_user_id, issued_at, expires_at, revoked) VALUES ($1, $2, $3, $4, FALSE)",
-        [sessionId, opaqueUserId, issuedAt, expiresAt]
-      );
-    } catch (err) {
-      throw new Error(`DISTRIBUTED_SESSION_STORE_UNAVAILABLE: Failed to persist session: ${(err as Error).message}`);
-    }
 
     return { token, session };
   }
@@ -405,7 +362,6 @@ export class DatabaseDistributedSessionStore implements SessionStore {
     const parts = token.split(".");
     if (parts.length !== 2) return null;
 
-    let payload: Session;
     try {
       const payloadStr = base64UrlToString(parts[0]);
       const expectedHmac = generateHmacHex(SESSION_SECRET, payloadStr);
@@ -414,80 +370,86 @@ export class DatabaseDistributedSessionStore implements SessionStore {
         return null;
       }
 
-      payload = JSON.parse(payloadStr);
+      const payload: Session = JSON.parse(payloadStr);
       if (Date.now() > payload.expiresAt) return null;
-    } catch {
-      return null;
-    }
 
-    const pool = await this.ensurePgTable();
-    try {
-      const res = await pool.query(
-        "SELECT revoked, expires_at FROM sessions WHERE session_id = $1",
-        [payload.sessionId]
-      );
+      const file = await this.githubStorageClient.getFile("sessions/active.json");
+      if (!file) return null;
+      const data = JSON.parse(file.content);
 
-      if (res.rows.length === 0) return null;
-      if (res.rows[0].revoked) return null;
-      if (Date.now() > Number(res.rows[0].expires_at)) return null;
+      if (data.revokedIds?.includes(payload.sessionId)) return null;
+
+      const storedSession = data.sessions[payload.sessionId];
+      if (!storedSession || Date.now() > storedSession.expiresAt) return null;
 
       return payload;
-    } catch (err) {
-      throw new Error(`DISTRIBUTED_SESSION_STORE_UNAVAILABLE: Database query failed: ${(err as Error).message}`);
+    } catch {
+      return null;
     }
   }
 
   public async revokeSession(sessionId: string): Promise<void> {
-    const pool = await this.ensurePgTable();
-    try {
-      await pool.query("UPDATE sessions SET revoked = TRUE WHERE session_id = $1", [sessionId]);
-    } catch (err) {
-      throw new Error(`DISTRIBUTED_SESSION_STORE_UNAVAILABLE: Revoke session failed: ${(err as Error).message}`);
+    const file = await this.githubStorageClient.getFile("sessions/active.json") || { content: JSON.stringify({sessions: {}, revokedIds: []}), sha: undefined };
+    const data = JSON.parse(file.content);
+    if (!data.revokedIds) data.revokedIds = [];
+    if (!data.revokedIds.includes(sessionId)) {
+      data.revokedIds.push(sessionId);
     }
+    delete data.sessions[sessionId];
+    await this.githubStorageClient.putFile("sessions/active.json", JSON.stringify(data), "Revoke session");
   }
 
   public async isRevoked(sessionId: string): Promise<boolean> {
-    const pool = await this.ensurePgTable();
-    try {
-      const res = await pool.query("SELECT revoked FROM sessions WHERE session_id = $1", [sessionId]);
-      if (res.rows.length === 0) return true;
-      return res.rows[0].revoked === true;
-    } catch (err) {
-      throw new Error(`DISTRIBUTED_SESSION_STORE_UNAVAILABLE: Check revoked failed: ${(err as Error).message}`);
-    }
+    const file = await this.githubStorageClient.getFile("sessions/active.json");
+    if (!file) return false;
+    const data = JSON.parse(file.content);
+    return data.revokedIds?.includes(sessionId) || false;
   }
 
   public async revokeAllForUser(opaqueUserId: string): Promise<void> {
-    const pool = await this.ensurePgTable();
-    try {
-      await pool.query("UPDATE sessions SET revoked = TRUE WHERE opaque_user_id = $1", [opaqueUserId]);
-    } catch (err) {
-      throw new Error(`DISTRIBUTED_SESSION_STORE_UNAVAILABLE: Revoke user sessions failed: ${(err as Error).message}`);
+    const file = await this.githubStorageClient.getFile("sessions/active.json") || { content: JSON.stringify({sessions: {}, revokedIds: []}), sha: undefined };
+    const data = JSON.parse(file.content);
+    if (!data.revokedIds) data.revokedIds = [];
+    for (const [sId, sess] of Object.entries(data.sessions) as [string, Session][]) {
+      if (sess.opaqueUserId === opaqueUserId) {
+        if (!data.revokedIds.includes(sId)) {
+          data.revokedIds.push(sId);
+        }
+        delete data.sessions[sId];
+      }
     }
+    await this.githubStorageClient.putFile("sessions/active.json", JSON.stringify(data), "Revoke user sessions");
   }
 
   public async cleanupExpiredSessions(): Promise<number> {
-    const pool = await this.ensurePgTable();
-    try {
-      const res = await pool.query("DELETE FROM sessions WHERE expires_at < $1", [Date.now()]);
-      return res.rowCount || 0;
-    } catch (err) {
-      throw new Error(`DISTRIBUTED_SESSION_STORE_UNAVAILABLE: Session cleanup failed: ${(err as Error).message}`);
+    const file = await this.githubStorageClient.getFile("sessions/active.json") || { content: JSON.stringify({sessions: {}, revokedIds: []}), sha: undefined };
+    const data = JSON.parse(file.content);
+    const now = Date.now();
+    let cleaned = 0;
+    for (const [sId, sess] of Object.entries(data.sessions) as [string, Session][]) {
+      if (now > sess.expiresAt) {
+        delete data.sessions[sId];
+        cleaned++;
+      }
     }
+    if (cleaned > 0) {
+      await this.githubStorageClient.putFile("sessions/active.json", JSON.stringify(data), "Cleanup expired sessions");
+    }
+    return cleaned;
   }
 }
 
 /**
  * SessionStore Factory - Selects session store implementation according to environment configuration.
- * Never silently degrades to memory/file if "distributed" is specified or required in production.
  */
-export function getSessionStore(): SessionStore {
+export function getSessionStore(githubStorageClient?: any): SessionStore {
   const provider =
     (typeof process !== "undefined" && process.env && process.env.SESSION_STORE_PROVIDER) ||
     (typeof process !== "undefined" && process.env && process.env.NODE_ENV === "production" ? "distributed" : "file");
 
   if (provider === "distributed") {
-    return new DatabaseDistributedSessionStore();
+    if (!githubStorageClient) throw new Error("GitHub storage client required for distributed session store");
+    return new GitHubDistributedSessionStore(githubStorageClient);
   } else if (provider === "memory") {
     return new InMemorySessionStore();
   } else {

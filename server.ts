@@ -3,7 +3,6 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import dotenv from "dotenv";
-import { createServer as createViteServer } from "vite";
 
 declare global {
   namespace Express {
@@ -109,7 +108,6 @@ import {
   SessionStore,
   InMemorySessionStore,
   FileSessionStore,
-  DatabaseDistributedSessionStore,
   getSessionStore,
 } from "./src/sdk/auth/SessionStore";
 
@@ -118,16 +116,21 @@ import {
   FreshnessLedger,
   InMemoryFreshnessLedger,
   FileFreshnessLedger,
-  DatabaseDistributedFreshnessLedger,
   getFreshnessLedger,
 } from "./src/sdk/storage/FreshnessLedger";
 
 export type { Session, SessionStore, FreshnessRecord, FreshnessLedger };
-export { InMemorySessionStore, FileSessionStore, DatabaseDistributedSessionStore };
-export { InMemoryFreshnessLedger, FileFreshnessLedger, DatabaseDistributedFreshnessLedger };
+export { InMemorySessionStore, FileSessionStore };
+export { InMemoryFreshnessLedger, FileFreshnessLedger };
 
-export const sessionStore: SessionStore = getSessionStore();
-export const freshnessLedger: FreshnessLedger = getFreshnessLedger();
+const serverGitHubClient = {
+  getFile: githubStorageGet,
+  putFile: (path: string, content: string, commitMsg: string) => githubStoragePut(path, content, commitMsg),
+  deleteDir: githubStorageDeleteDir,
+};
+
+export const sessionStore: SessionStore = getSessionStore(serverGitHubClient);
+export const freshnessLedger: FreshnessLedger = getFreshnessLedger(serverGitHubClient);
 
 // Session Auth Middleware
 async function requireAuth(req: Request, res: Response, next: NextFunction) {
@@ -1086,12 +1089,27 @@ app.delete("/api/vault/file", requireAuth, async (req: Request, res: Response) =
 // 10. POST /api/testing/run
 app.post("/api/testing/run", async (req: Request, res: Response) => {
   try {
-    const { SecurityTestRunner } = await import("./src/sdk/testing/SecurityTestRunner.js");
+    let SecurityTestRunner: any;
+    try {
+      const runnerMod = await import("./src/sdk/testing/SecurityTestRunner.js");
+      SecurityTestRunner = runnerMod.SecurityTestRunner;
+    } catch {
+      const runnerMod = await import("./src/sdk/testing/SecurityTestRunner");
+      SecurityTestRunner = runnerMod.SecurityTestRunner;
+    }
     const results = await SecurityTestRunner.runAllTests();
     return res.json({ results });
   } catch (err: any) {
     return res.status(500).json({ error: "Testing Failed", message: err.message });
   }
+});
+
+// Diagnostic health endpoints for uptime and serverless verification
+app.get("/api/health", (_req: Request, res: Response) => {
+  return res.json({ ok: true, status: "healthy", timestamp: new Date().toISOString() });
+});
+app.get("/health", (_req: Request, res: Response) => {
+  return res.json({ ok: true, status: "healthy", timestamp: new Date().toISOString() });
 });
 
 // Guarantee that any unhandled /api/* requests never fall through to index.html/Vite middlewares
@@ -1105,6 +1123,7 @@ app.all("/api/*", (req: Request, res: Response) => {
 // Start Express + Vite Dev or Production Server
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -1123,7 +1142,21 @@ async function startServer() {
   });
 }
 
-if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
+// Ensure app.listen() is NEVER executed inside Vercel's serverless runtime or when imported
+const isDirectRun = Boolean(
+  process.argv[1] &&
+  (process.argv[1].endsWith("server.ts") || process.argv[1].endsWith("server.cjs") || process.argv[1].endsWith("server.js"))
+);
+
+const isServerless = Boolean(
+  process.env.VERCEL ||
+  process.env.NOW_REGION ||
+  process.env.AWS_LAMBDA_FUNCTION_NAME ||
+  process.env.LAMBDA_TASK_ROOT ||
+  process.env.IS_SERVERLESS_RUNTIME
+);
+
+if (!isServerless && isDirectRun && process.env.NODE_ENV !== "test") {
   startServer();
 }
 
