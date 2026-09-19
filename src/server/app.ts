@@ -321,8 +321,35 @@ const serverGitHubClient = {
   deleteDir: githubStorageDeleteDir,
 };
 
-export const sessionStore: SessionStore = getSessionStore(serverGitHubClient);
-export const freshnessLedger: FreshnessLedger = getFreshnessLedger(serverGitHubClient);
+// Helper: Lazy initialization of distributed stores
+let _sessionStore: SessionStore | null = null;
+let _freshnessLedger: FreshnessLedger | null = null;
+
+function getActiveSessionStore(): SessionStore {
+  if (!_sessionStore) {
+    try {
+      _sessionStore = getSessionStore(serverGitHubClient);
+    } catch (err: any) {
+      console.error("[INIT] Failed to init SessionStore:", err.message);
+      // Fallback: return an in-memory store if distributed fails
+      _sessionStore = new InMemorySessionStore();
+    }
+  }
+  return _sessionStore;
+}
+
+function getActiveFreshnessLedger(): FreshnessLedger {
+  if (!_freshnessLedger) {
+    try {
+      _freshnessLedger = getFreshnessLedger(serverGitHubClient);
+    } catch (err: any) {
+      console.error("[INIT] Failed to init FreshnessLedger:", err.message);
+      // Fallback: return an in-memory ledger if distributed fails
+      _freshnessLedger = new InMemoryFreshnessLedger();
+    }
+  }
+  return _freshnessLedger;
+}
 
 // Session Auth Middleware
 async function requireAuth(req: Request, res: Response, next: NextFunction) {
@@ -350,7 +377,7 @@ async function requireAuth(req: Request, res: Response, next: NextFunction) {
   }
 
   try {
-    const session = await sessionStore.validateSession(token);
+    const session = await getActiveSessionStore().validateSession(token);
     if (!session) {
       return res.status(401).json({ error: "Unauthorized", message: "Invalid or expired session token." });
     }
@@ -473,7 +500,7 @@ app.post("/api/vault/register", rateLimiter(10, 60000), async (req: Request, res
 
     await githubStoragePut(userFilePath, JSON.stringify(authConfig), "Vault Account Config Initialized");
 
-    const { token: sessionToken } = await sessionStore.createSession(opaqueUserId);
+    const { token: sessionToken } = await getActiveSessionStore().createSession(opaqueUserId);
     res.cookie("sessionToken", sessionToken, {
       httpOnly: true,
       secure: req.secure || req.headers["x-forwarded-proto"] === "https",
@@ -591,7 +618,7 @@ app.post("/api/vault/login", rateLimiter(15, 60000), async (req: Request, res: R
       return res.status(401).json({ error: "Authentication Failed", message: "Invalid password proof." });
     }
 
-    const { token: sessionToken } = await sessionStore.createSession(opaqueUserId);
+    const { token: sessionToken } = await getActiveSessionStore().createSession(opaqueUserId);
     res.cookie("sessionToken", sessionToken, {
       httpOnly: true,
       secure: req.secure || req.headers["x-forwarded-proto"] === "https",
@@ -615,7 +642,7 @@ app.post("/api/vault/login", rateLimiter(15, 60000), async (req: Request, res: R
 // 4. POST /api/vault/logout
 app.post("/api/vault/logout", requireAuth, async (req: Request, res: Response) => {
   const session = (req as any).session as Session;
-  await sessionStore.revokeSession(session.sessionId);
+  await getActiveSessionStore().revokeSession(session.sessionId);
   res.clearCookie("sessionToken", {
     path: "/",
     sameSite: "lax",
@@ -644,7 +671,7 @@ app.get("/api/vault/state", requireAuth, async (req: Request, res: Response) => 
     // Fetch trusted freshness anchor
     let freshnessHead = null;
     try {
-      freshnessHead = await freshnessLedger.getHead(session.opaqueUserId, appId);
+      freshnessHead = await getActiveFreshnessLedger().getHead(session.opaqueUserId, appId);
     } catch {
       return res.status(503).json({
         error: "FRESHNESS_CHECK_FAILED",
@@ -710,13 +737,13 @@ const syncHandler = async (req: Request, res: Response) => {
     // 1. Verify freshness ledger availability
     let currentFreshnessHead: FreshnessRecord | null = null;
     try {
-      if (!await freshnessLedger.isAvailable()) {
+      if (!await getActiveFreshnessLedger().isAvailable()) {
         return res.status(503).json({
           error: "FRESHNESS_CHECK_FAILED",
           message: "Trusted freshness ledger is currently unavailable. State sync rejected.",
         });
       }
-      currentFreshnessHead = await freshnessLedger.getHead(session.opaqueUserId, appId);
+      currentFreshnessHead = await getActiveFreshnessLedger().getHead(session.opaqueUserId, appId);
     } catch {
       return res.status(503).json({
         error: "FRESHNESS_CHECK_FAILED",
@@ -798,7 +825,7 @@ const syncHandler = async (req: Request, res: Response) => {
     }
 
     // 5. Update trusted freshness head atomically AFTER successful GitHub write
-    const updateRes = await freshnessLedger.updateHead(
+    const updateRes = await getActiveFreshnessLedger().updateHead(
       session.opaqueUserId,
       appId,
       incomingVersion,
@@ -868,8 +895,8 @@ app.delete("/api/vault/account", requireAuth, async (req: Request, res: Response
 
     await githubStorageDeleteDir(userDirPath);
 
-    await sessionStore.revokeAllForUser(session.opaqueUserId);
-    await freshnessLedger.deleteUserRecords(session.opaqueUserId);
+    await getActiveSessionStore().revokeAllForUser(session.opaqueUserId);
+    await getActiveFreshnessLedger().deleteUserRecords(session.opaqueUserId);
 
     return res.json({ success: true, message: "Account data deleted successfully." });
   } catch (err: any) {
