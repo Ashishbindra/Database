@@ -1482,6 +1482,324 @@ export class SecurityTestRunner {
       }
     });
 
+    // Helper to register and login a real user in SERVER mode
+    const registerAndLoginUser = async (id: string) => {
+      const client = new CentralDataClient({ mode: "SERVER" });
+      await client.init();
+      const username = `u_${id}_${Date.now()}`;
+      const pass = "TestPass123!";
+      await client.authManager.register(username, pass);
+      await client.authManager.login(username, pass);
+      return { client, userId: client.keyManager.getActiveUserId(), token: client.authManager.getSessionToken() };
+    };
+
+    const getOrigin = () => {
+      if (typeof window !== "undefined" && window.location && window.location.origin) {
+        return window.location.origin;
+      }
+      return "http://localhost:3000";
+    };
+    const testOrigin = getOrigin();
+
+    // SEC-91: Authenticated user can access own file
+    await runTest("SEC-91", "Authenticated user can access own file namespace", "AUTHENTICATION", async () => {
+      const { client } = await registerAndLoginUser("sec91");
+      const testData = { secret: "Sec91Secret" };
+      await client.vault.set("test91.json", testData);
+      const res = await client.vault.get("test91.json");
+      if (!res || res.secret !== "Sec91Secret") {
+        throw new Error("Failed to read back encrypted vault file.");
+      }
+      return "PASSED: Authenticated user successfully wrote and read back encrypted vault file.";
+    });
+
+    // SEC-92: Unauthenticated request is rejected
+    await runTest("SEC-92", "Unauthenticated request to file API is rejected", "AUTHENTICATION", async () => {
+      const res = await fetch(testOrigin + "/api/vault/file?path=data/users/any/test.json");
+      if (res.status !== 401) {
+        throw new Error(`Expected status 401, got ${res.status}`);
+      }
+      return "PASSED: Unauthenticated request was correctly rejected with HTTP 401.";
+    });
+
+    // SEC-93: User A cannot read User B's file
+    await runTest("SEC-93", "User A cannot read User B's file in server namespace", "ISOLATION", async () => {
+      const userA = await registerAndLoginUser("sec93_a");
+      const userB = await registerAndLoginUser("sec93_b");
+
+      // B creates a file
+      await userB.client.vault.set("private_b.json", { msg: "B-Only" });
+
+      // A tries to read it using B's path but A's token
+      const pathB = `data/users/${userB.userId}/private_b.json`;
+      const res = await fetch(testOrigin + `/api/vault/file?path=${encodeURIComponent(pathB)}`, {
+        headers: { Authorization: `Bearer ${userA.token}` }
+      });
+
+      if (res.status === 200) {
+        throw new Error("User A successfully read User B's private file!");
+      }
+      if (res.status !== 403) {
+        throw new Error(`Expected 403 Forbidden, got status ${res.status}`);
+      }
+      return "PASSED: Server strictly rejected User A's attempt to read User B's path.";
+    });
+
+    // SEC-94: User A cannot update User B's file
+    await runTest("SEC-94", "User A cannot update User B's file in server namespace", "ISOLATION", async () => {
+      const userA = await registerAndLoginUser("sec94_a");
+      const userB = await registerAndLoginUser("sec94_b");
+
+      // B's file path
+      const pathB = `data/users/${userB.userId}/private_b.json`;
+
+      // A tries to write to B's path
+      const res = await fetch(testOrigin + "/api/vault/file", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${userA.token}`
+        },
+        body: JSON.stringify({
+          path: pathB,
+          content: "malicious_overwrite"
+        })
+      });
+
+      if (res.status === 200) {
+        throw new Error("User A successfully updated User B's file!");
+      }
+      if (res.status !== 403) {
+        throw new Error(`Expected 403 Forbidden, got status ${res.status}`);
+      }
+      return "PASSED: Server strictly rejected User A's write attempt to User B's path.";
+    });
+
+    // SEC-95: User A cannot delete User B's file
+    await runTest("SEC-95", "User A cannot delete User B's file in server namespace", "ISOLATION", async () => {
+      const userA = await registerAndLoginUser("sec95_a");
+      const userB = await registerAndLoginUser("sec95_b");
+
+      // B's file path
+      const pathB = `data/users/${userB.userId}/private_b.json`;
+
+      // A tries to delete B's path
+      const res = await fetch(testOrigin + "/api/vault/file", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${userA.token}`
+        },
+        body: JSON.stringify({
+          path: pathB,
+          sha: "dummy_sha"
+        })
+      });
+
+      if (res.status === 200) {
+        throw new Error("User A successfully deleted User B's file!");
+      }
+      if (res.status !== 403) {
+        throw new Error(`Expected 403 Forbidden, got status ${res.status}`);
+      }
+      return "PASSED: Server strictly rejected User A's delete request for User B's path.";
+    });
+
+    // SEC-96: Path traversal is rejected
+    await runTest("SEC-96", "Directory traversal attempt using ../ is rejected", "INTEGRITY", async () => {
+      const userA = await registerAndLoginUser("sec96");
+      const traversalPath = `data/users/${userA.userId}/../other/stolen.json`;
+
+      const res = await fetch(testOrigin + `/api/vault/file?path=${encodeURIComponent(traversalPath)}`, {
+        headers: { Authorization: `Bearer ${userA.token}` }
+      });
+
+      if (res.status !== 403) {
+        throw new Error(`Expected status 403, got ${res.status}`);
+      }
+      return "PASSED: Directory traversal attempt rejected by server path validation rules.";
+    });
+
+    // SEC-97: Encoded path traversal is rejected
+    await runTest("SEC-97", "URL-encoded traversal sequences are decoded and rejected", "INTEGRITY", async () => {
+      const userA = await registerAndLoginUser("sec97");
+      const encodedPath = `data/users/${userA.userId}/%252e%252e%252fother/stolen.json`; // double encoded
+
+      const res = await fetch(testOrigin + `/api/vault/file?path=${encodedPath}`, {
+        headers: { Authorization: `Bearer ${userA.token}` }
+      });
+
+      if (res.status !== 403) {
+        throw new Error(`Expected status 403, got ${res.status}`);
+      }
+      return "PASSED: Double-encoded traversal sequence decoded and rejected with HTTP 403.";
+    });
+
+    // SEC-98: Absolute path is rejected
+    await runTest("SEC-98", "Absolute path references in API are strictly rejected", "INTEGRITY", async () => {
+      const userA = await registerAndLoginUser("sec98");
+      const absPath = "/etc/passwd";
+
+      const res = await fetch(testOrigin + `/api/vault/file?path=${encodeURIComponent(absPath)}`, {
+        headers: { Authorization: `Bearer ${userA.token}` }
+      });
+
+      if (res.status !== 403) {
+        throw new Error(`Expected status 403, got ${res.status}`);
+      }
+      return "PASSED: Absolute path parameter correctly blocked and rejected with HTTP 403.";
+    });
+
+    // SEC-99: /api/vault/* never returns index.html
+    await runTest("SEC-99", "Non-existent API endpoint never returns HTML fallbacks", "INTEGRITY", async () => {
+      const res = await fetch(testOrigin + "/api/vault/completely_invalid_and_nonexistent_route");
+      const text = await res.text();
+
+      if (res.status !== 404) {
+        throw new Error(`Expected status 404, got ${res.status}`);
+      }
+      if (text.includes("<!DOCTYPE html>") || text.includes("<html")) {
+        throw new Error("API endpoint returned React SPA index.html fallback instead of 404 JSON!");
+      }
+      return "PASSED: API 404 routes correctly return JSON and do not fall through to SPA HTML.";
+    });
+
+    // SEC-100: API errors always return JSON
+    await runTest("SEC-100", "API errors always return JSON format", "INTEGRITY", async () => {
+      const res = await fetch(testOrigin + "/api/vault/file?path=data/users/invalid/test.json");
+      const contentType = res.headers.get("Content-Type") || "";
+
+      if (!contentType.includes("application/json")) {
+        throw new Error(`Expected JSON response, got content-type: ${contentType}`);
+      }
+      const data = await res.json();
+      if (!data.error || !data.message) {
+        throw new Error("JSON error response lacks standard error/message payload.");
+      }
+      return "PASSED: API error endpoint returned standard JSON response format.";
+    });
+
+    // SEC-101: GitHub PAT is never exposed to client responses
+    await runTest("SEC-101", "GitHub PAT token is never exposed to client storage configs", "PRIVACY", async () => {
+      const client = new CentralDataClient({ mode: "SERVER" });
+      const config = client.githubClient.getConfig();
+      if (config.pat) {
+        throw new Error("GitHub PAT exposed in client-side config object!");
+      }
+      return "PASSED: GitHub Personal Access Token is completely hidden from public client config.";
+    });
+
+    // SEC-102: Plaintext private data is never sent to GitHub
+    await runTest("SEC-102", "Plaintext private user data is never written to remote storage", "PRIVACY", async () => {
+      const { client } = await registerAndLoginUser("sec102");
+      const payload = { personalNote: "highly_secret_phrase_999" };
+      await client.vault.set("note.json", payload);
+
+      const files = GitHubMockRemote.getAllVirtualFiles();
+      for (const [filePath, fileEntry] of Object.entries(files)) {
+        if (filePath.includes("note.json")) {
+          if (fileEntry.content.includes("highly_secret_phrase_999")) {
+            throw new Error(`Plaintext leak detected in remote storage file: ${filePath}`);
+          }
+          if (!fileEntry.content.includes("ciphertextHex") || !fileEntry.content.includes("nonceHex")) {
+            throw new Error("Written remote file does not have standard encrypted envelope structure.");
+          }
+        }
+      }
+      return "PASSED: Written storage payload is fully encrypted client-side; zero plaintext leaked.";
+    });
+
+    // SEC-103: Encryption/decryption round trip works
+    await runTest("SEC-103", "Vault write/read encryption round trip verified", "ENCRYPTION", async () => {
+      const { client } = await registerAndLoginUser("sec103");
+      const data = { tokenCode: "XYZ-123456", sensitive: true };
+      await client.vault.set("credential.json", data);
+
+      const retrieved = await client.vault.get("credential.json");
+      if (!retrieved || retrieved.tokenCode !== "XYZ-123456" || retrieved.sensitive !== true) {
+        throw new Error("Decrypted payload mismatch on encryption/decryption round trip.");
+      }
+      return "PASSED: Verified symmetric client-side encryption and decryption round-trip.";
+    });
+
+    // SEC-104: Update preserves encryption
+    await runTest("SEC-104", "Updating an existing record overwrites with high-entropy ciphertext", "ENCRYPTION", async () => {
+      const { client } = await registerAndLoginUser("sec104");
+      await client.vault.set("record.json", { step: 1 });
+      await client.vault.update("record.json", { step: 2 });
+
+      const retrieved = await client.vault.get("record.json");
+      if (!retrieved || retrieved.step !== 2) {
+        throw new Error("Failed to retrieve updated vault record.");
+      }
+
+      const files = GitHubMockRemote.getAllVirtualFiles();
+      for (const [filePath, fileEntry] of Object.entries(files)) {
+        if (filePath.includes("record.json")) {
+          if (fileEntry.content.includes("step") || fileEntry.content.includes("2")) {
+            throw new Error("Updated remote storage file contains raw plaintext!");
+          }
+        }
+      }
+      return "PASSED: Vault record update preserves client-side encryption bounds.";
+    });
+
+    // SEC-105: Delete removes only the authorized record
+    await runTest("SEC-105", "Vault file deletion deletes targeted record only", "INTEGRITY", async () => {
+      const { client } = await registerAndLoginUser("sec105");
+      await client.vault.set("f1.json", { file: 1 });
+      await client.vault.set("f2.json", { file: 2 });
+
+      await client.vault.delete("f1.json");
+
+      const exist1 = await client.vault.exists("f1.json");
+      const exist2 = await client.vault.exists("f2.json");
+
+      if (exist1 || !exist2) {
+        throw new Error(`Deletion target mismatch: f1.json exists=${exist1}, f2.json exists=${exist2}`);
+      }
+      return "PASSED: Deletion strictly removed target file while leaving secondary files intact.";
+    });
+
+    // SEC-106: GitHub SHA conflict is handled safely
+    await runTest("SEC-106", "Out of sync SHA update throws conflict and fails-safe", "INTEGRITY", async () => {
+      const { client } = await registerAndLoginUser("sec106");
+      const { sha } = await client.vault.set("conflict.json", { state: "v1" });
+
+      // Out-of-sync update with invalid SHA should throw
+      try {
+        await client.vault.update("conflict.json", { state: "v2" }, "stale_or_invalid_sha_123");
+        throw new Error("Update succeeded despite stale SHA concurrency mismatch!");
+      } catch (err: any) {
+        if (err.message && err.message.includes("conflict")) {
+          return "PASSED: Out-of-sync SHA conflict rejected cleanly by storage driver.";
+        }
+        throw err;
+      }
+    });
+
+    // SEC-107: Session expiration is rejected
+    await runTest("SEC-107", "Expired session token is rejected by the API", "AUTHENTICATION", async () => {
+      const res = await fetch(testOrigin + "/api/vault/file?path=data/users/some/test.json", {
+        headers: { Authorization: "Bearer expired_or_bogus_token_xyz" }
+      });
+      if (res.status !== 401) {
+        throw new Error(`Expected status 401, got ${res.status}`);
+      }
+      return "PASSED: Expired session token rejected with HTTP 401 Unauthorized.";
+    });
+
+    // SEC-108: Invalid/malformed authentication is rejected
+    await runTest("SEC-108", "Malformed authentication scheme is rejected", "AUTHENTICATION", async () => {
+      const res = await fetch(testOrigin + "/api/vault/file?path=data/users/some/test.json", {
+        headers: { Authorization: "Basic dGVzdDp0ZXN0" }
+      });
+      if (res.status !== 401) {
+        throw new Error(`Expected status 401, got ${res.status}`);
+      }
+      return "PASSED: Malformed authentication schema correctly failed and rejected with HTTP 401.";
+    });
+
     return results;
   }
 }

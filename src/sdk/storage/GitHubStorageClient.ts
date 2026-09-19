@@ -7,6 +7,14 @@
 import { GitHubConfig, RemoteFileEntry } from "../types";
 import { GitHubMockRemote } from "./GitHubMockRemote";
 
+function getApiUrl(endpoint: string): string {
+  if (endpoint.startsWith("http://") || endpoint.startsWith("https://")) return endpoint;
+  if (typeof window !== "undefined" && window.location && window.location.origin) {
+    return `${window.location.origin}${endpoint}`;
+  }
+  return `http://localhost:3000${endpoint}`;
+}
+
 export class GitHubStorageClient {
   private config: GitHubConfig;
   private sessionTokenSupplier: (() => string | null) | null = null;
@@ -38,7 +46,7 @@ export class GitHubStorageClient {
     if (!token) return null;
 
     try {
-      const res = await fetch(`/api/vault/state?appId=${encodeURIComponent(appId)}`, {
+      const res = await fetch(getApiUrl(`/api/vault/state?appId=${encodeURIComponent(appId)}`), {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -68,7 +76,7 @@ export class GitHubStorageClient {
       throw new Error("Unauthorized: Active session token required for state sync.");
     }
 
-    const res = await fetch("/api/vault/sync", {
+    const res = await fetch(getApiUrl("/api/vault/sync"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -105,7 +113,7 @@ export class GitHubStorageClient {
     if (!token) return null;
 
     try {
-      const res = await fetch(`/api/vault/file?path=${encodeURIComponent(path)}`, {
+      const res = await fetch(getApiUrl(`/api/vault/file?path=${encodeURIComponent(path)}`), {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -164,7 +172,7 @@ export class GitHubStorageClient {
     const token = this.sessionTokenSupplier ? this.sessionTokenSupplier() : null;
     if (!token) return [];
 
-    const res = await fetch(`/api/vault/tree`, {
+    const res = await fetch(getApiUrl(`/api/vault/tree`), {
       headers: {
         Authorization: `Bearer ${token}`,
       },

@@ -11,6 +11,7 @@ import { GitHubStorageClient } from "./storage/GitHubStorageClient";
 import { IndexedDBStorage } from "./storage/IndexedDBStorage";
 import { SyncManager } from "./sync/SyncManager";
 import { GitHubConfig, SyncRecord } from "./types";
+import { EncryptedVaultSDK } from "./storage/EncryptedVaultSDK";
 
 export class CentralDataClient {
   public keyManager: KeyManager;
@@ -18,6 +19,7 @@ export class CentralDataClient {
   public githubClient: GitHubStorageClient;
   public authManager: AuthManager;
   public syncManager: SyncManager;
+  public vault: EncryptedVaultSDK;
 
   private isInitialized = false;
 
@@ -39,6 +41,8 @@ export class CentralDataClient {
 
     // Provide Session Supplier to GitHub Client
     this.githubClient.setSessionTokenSupplier(() => this.authManager.getSessionToken());
+
+    this.vault = new EncryptedVaultSDK(this);
   }
 
   public async init(): Promise<void> {
