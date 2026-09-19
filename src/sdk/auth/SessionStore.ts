@@ -334,9 +334,21 @@ export class FileSessionStore implements SessionStore {
  * Fails closed if GitHub backend is unconfigured or unreachable.
  */
 export class GitHubDistributedSessionStore implements SessionStore {
-  constructor(private githubStorageClient: any) {}
+  private available = true;
+  constructor(private githubStorageClient: any) {
+    if (!githubStorageClient) {
+      this.available = false;
+    }
+  }
+
+  public setAvailable(flag: boolean): void {
+    this.available = flag;
+  }
 
   public async createSession(opaqueUserId: string): Promise<{ token: string; session: Session }> {
+    if (!this.available || !this.githubStorageClient) {
+      throw new Error("DISTRIBUTED_SESSION_STORE_UNAVAILABLE: GitHub session backend is unreachable.");
+    }
     const sessionId = generateRandomHex(16);
     const issuedAt = Date.now();
     const expiresAt = issuedAt + 24 * 60 * 60 * 1000;

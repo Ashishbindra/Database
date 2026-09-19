@@ -295,13 +295,21 @@ export class FileFreshnessLedger implements FreshnessLedger {
  * Fails closed if GitHub backend is unconfigured or unreachable.
  */
 export class GitHubDistributedFreshnessLedger implements FreshnessLedger {
+  private available = true;
   constructor(private githubStorageClient: any) {}
 
+  public setAvailable(flag: boolean): void {
+    this.available = flag;
+  }
+
   public async isAvailable(): Promise<boolean> {
-    return true; // Assume available if client exists
+    return this.available;
   }
 
   public async getHead(opaqueUserId: string, appId: string): Promise<FreshnessRecord | null> {
+    if (!this.available) {
+      throw new Error("FRESHNESS_LEDGER_UNAVAILABLE: Server freshness ledger is unreachable.");
+    }
     const file = await this.githubStorageClient.getFile(`freshness/${opaqueUserId}/${appId}.json`);
     if (!file) return null;
     return JSON.parse(file.content) as FreshnessRecord;
@@ -314,6 +322,9 @@ export class GitHubDistributedFreshnessLedger implements FreshnessLedger {
     headStateHash: string,
     previousStateHash: string
   ): Promise<{ success: boolean; record?: FreshnessRecord; reason?: string }> {
+    if (!this.available) {
+      throw new Error("FRESHNESS_LEDGER_UNAVAILABLE: Server freshness ledger is unreachable.");
+    }
     const filePath = `freshness/${opaqueUserId}/${appId}.json`;
     const file = await this.githubStorageClient.getFile(filePath) || { content: null, sha: undefined };
     
