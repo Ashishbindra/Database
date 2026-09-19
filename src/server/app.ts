@@ -41,9 +41,23 @@ declare global {
   }
 }
 
-dotenv.config();
+try {
+  dotenv.config();
+} catch {
+  // Ignore in environments where .env does not exist
+}
 
 const app = express();
+
+// Middleware: Normalize URL for Vercel Rewrites
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  const originalUrl =
+    (req.headers && (req.headers["x-vercel-original-url"] || req.headers["x-forwarded-uri"] || req.headers["x-original-url"])) as string;
+  if (originalUrl && typeof originalUrl === "string") {
+    req.url = originalUrl;
+  }
+  next();
+});
 
 // Security Configurations (evaluated dynamically for environment changes)
 function getSessionSecret(): string {
@@ -102,13 +116,34 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+// Helper: Safely get client IP in serverless environments
+function getClientIp(req: Request): string {
+  try {
+    const forwarded = req.headers["x-forwarded-for"];
+    if (typeof forwarded === "string") {
+      const first = forwarded.split(",")[0].trim();
+      if (first) return first;
+    }
+    const realIp = req.headers["x-real-ip"];
+    if (typeof realIp === "string" && realIp) {
+      return realIp;
+    }
+    if (req.socket && req.socket.remoteAddress) {
+      return req.socket.remoteAddress;
+    }
+  } catch {
+    // Ignore getter errors in synthetic serverless requests
+  }
+  return "serverless-client";
+}
+
 // Middleware: Rate Limiter
 function rateLimiter(maxRequests = 60, windowMs = 60000) {
   return (req: Request, res: Response, next: NextFunction) => {
-    const ip = req.ip || req.socket.remoteAddress || "global";
+    const ip = getClientIp(req);
 
     // Bypass rate limiting on loopback / localhost to prevent test suite rate limiting
-    if (ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1" || ip.includes("127.0.0.1")) {
+    if (ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1" || ip.includes("127.0.0.1") || ip === "serverless-client") {
       return next();
     }
 
@@ -465,6 +500,27 @@ export const activeLoginChallenges = new Map<string, LoginChallenge>();
 // API ROUTES FOR SECURE VAULT
 // ==========================================
 
+// Diagnostic health endpoints - independent of storage or auth initialization
+app.get("/api/health", (_req: Request, res: Response) => {
+  return res.json({
+    ok: true,
+    runtime: process.env.VERCEL ? "vercel" : "express",
+    storageProvider: getGitHubPat() ? "github" : "local-memory",
+    status: "healthy",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/health", (_req: Request, res: Response) => {
+  return res.json({
+    ok: true,
+    runtime: process.env.VERCEL ? "vercel" : "express",
+    storageProvider: getGitHubPat() ? "github" : "local-memory",
+    status: "healthy",
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // 1. POST /api/vault/register
 app.post("/api/vault/register", rateLimiter(10, 60000), async (req: Request, res: Response) => {
   try {
@@ -479,12 +535,17 @@ app.post("/api/vault/register", rateLimiter(10, 60000), async (req: Request, res
     const indexFilePath = `data/users_index/${usernameHash}.json`;
     const userFilePath = `data/users/${opaqueUserId}/account/auth-config.json`;
 
+    console.log(`[REGISTER_START] User: ${usernameHash.substring(0, 8)}...`);
     // Store index mapping (usernameHash -> opaqueUserId)
     await githubStoragePut(
       indexFilePath,
       JSON.stringify({ usernameHash, opaqueUserId, saltHex, createdAt: new Date().toISOString() }),
       "Vault Account Index Update"
-    );
+    ).catch(err => {
+      console.error(`[REGISTER_FAILURE] Index Put Error: ${err.message}`);
+      throw err;
+    });
+    console.log(`[REGISTER_INDEX_PUT_SUCCESS] User: ${usernameHash.substring(0, 8)}...`);
 
     // Store Auth Config
     const authConfig = {
@@ -498,7 +559,12 @@ app.post("/api/vault/register", rateLimiter(10, 60000), async (req: Request, res
       schemaVersion: 1,
     };
 
-    await githubStoragePut(userFilePath, JSON.stringify(authConfig), "Vault Account Config Initialized");
+    console.log(`[REGISTER_AUTH_PUT_START] User: ${opaqueUserId.substring(0, 8)}...`);
+    await githubStoragePut(userFilePath, JSON.stringify(authConfig), "Vault Account Config Initialized").catch(err => {
+      console.error(`[REGISTER_FAILURE] Auth Put Error: ${err.message}`);
+      throw err;
+    });
+    console.log(`[REGISTER_AUTH_PUT_SUCCESS] User: ${opaqueUserId.substring(0, 8)}...`);
 
     const { token: sessionToken } = await getActiveSessionStore().createSession(opaqueUserId);
     res.cookie("sessionToken", sessionToken, {

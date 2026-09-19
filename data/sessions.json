@@ -1985,6 +1985,36 @@
       "opaqueUserId": "u_7c3e58b4c6692788",
       "issuedAt": 1789838187903,
       "expiresAt": 1789924587903
+    },
+    "27019a73caa841575c45d220ee93b014": {
+      "sessionId": "27019a73caa841575c45d220ee93b014",
+      "opaqueUserId": "test_opaque",
+      "issuedAt": 1789840398624,
+      "expiresAt": 1789926798624
+    },
+    "72e8ef69892d15aeac9c574b6e59068a": {
+      "sessionId": "72e8ef69892d15aeac9c574b6e59068a",
+      "opaqueUserId": "u_test_user_sim_1789841254262",
+      "issuedAt": 1789841254267,
+      "expiresAt": 1789927654267
+    },
+    "5e7fa54bef3c952d0bc8932bf61d4a2e": {
+      "sessionId": "5e7fa54bef3c952d0bc8932bf61d4a2e",
+      "opaqueUserId": "u_test_user_nosocket_1789841259908",
+      "issuedAt": 1789841259912,
+      "expiresAt": 1789927659912
+    },
+    "da8ea61db09f75108b5f8a60a50c576f": {
+      "sessionId": "da8ea61db09f75108b5f8a60a50c576f",
+      "opaqueUserId": "u_test_user_realhttp_1789841272423",
+      "issuedAt": 1789841272450,
+      "expiresAt": 1789927672450
+    },
+    "8d5d530677bcd66a58e42683611af64c": {
+      "sessionId": "8d5d530677bcd66a58e42683611af64c",
+      "opaqueUserId": "u_test_user_handler_1789841277905",
+      "issuedAt": 1789841277938,
+      "expiresAt": 1789927677938
     }
   },
   "revokedIds": [

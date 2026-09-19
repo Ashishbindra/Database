@@ -400,4 +400,3 @@ export function getFreshnessLedger(githubStorageClient?: any): FreshnessLedger {
 
 // Backwards Compatibility Export
 export const ServerSideFreshnessLedger = FileFreshnessLedger;
-export const defaultFreshnessLedger = getFreshnessLedger();
