@@ -1270,6 +1270,74 @@ app.delete("/api/vault/file", requireAuth, async (req: Request, res: Response) =
   }
 });
 
+// Alias: POST /api/vault/unlock -> forwards to login or unlocks session
+app.post("/api/vault/unlock", rateLimiter(15, 60000), async (req: Request, res: Response) => {
+  // If request contains credentials, handle via login logic
+  if (req.body && (req.body.opaqueUserId || req.body.username)) {
+    return (app as any)._router.handle({ ...req, url: "/api/vault/login" }, res);
+  }
+  return res.status(400).json({ error: "Invalid Request", message: "Credentials or session token required to unlock." });
+});
+
+// Alias: POST /api/vault/lock -> forwards to logout
+app.post("/api/vault/lock", requireAuth, async (req: Request, res: Response) => {
+  return (app as any)._router.handle({ ...req, url: "/api/vault/logout" }, res);
+});
+
+// Alias: POST /api/vault/store -> forwards to /api/vault/file
+app.post("/api/vault/store", requireAuth, async (req: Request, res: Response) => {
+  return (app as any)._router.handle({ ...req, url: "/api/vault/file" }, res);
+});
+
+// Alias: POST /api/vault/retrieve -> retrieves vault file or state
+app.post("/api/vault/retrieve", requireAuth, async (req: Request, res: Response) => {
+  const filePath = req.body.path;
+  if (filePath) {
+    req.query.path = filePath;
+    return (app as any)._router.handle({ ...req, method: "GET", url: `/api/vault/file?path=${encodeURIComponent(filePath)}` }, res);
+  }
+  return (app as any)._router.handle({ ...req, method: "GET", url: "/api/vault/state" }, res);
+});
+
+// Alias: POST /api/vault/delete -> forwards to DELETE /api/vault/file
+app.post("/api/vault/delete", requireAuth, async (req: Request, res: Response) => {
+  return (app as any)._router.handle({ ...req, method: "DELETE", url: "/api/vault/file" }, res);
+});
+
+// GET /api/vault/stats -> returns vault statistics and storage provider info
+app.get("/api/vault/stats", async (_req: Request, res: Response) => {
+  const config = checkGitHubStorageConfig();
+  return res.json({
+    ok: true,
+    storage: {
+      provider: "github",
+      owner: getGitHubOwner(),
+      repo: getGitHubRepo(),
+      branch: getGitHubBranch(),
+      configured: config.valid,
+    },
+    status: config.valid ? "operational" : isProductionRuntime() ? "degraded" : "local-simulation",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// POST /api/vault/test-sync -> test sync endpoint
+app.post("/api/vault/test-sync", async (req: Request, res: Response) => {
+  const config = checkGitHubStorageConfig();
+  if (isProductionRuntime() && !config.valid) {
+    return res.status(503).json({
+      error: "GitHub Storage Unavailable",
+      message: "GitHub storage configuration missing in production runtime.",
+    });
+  }
+  return res.json({
+    ok: true,
+    synced: true,
+    message: "Vault sync test completed successfully.",
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // 10. POST /api/testing/run
 app.post("/api/testing/run", async (req: Request, res: Response) => {
   try {

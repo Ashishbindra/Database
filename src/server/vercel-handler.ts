@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "http";
-import app from "../src/server/app";
+import app from "./app";
 
 export default function handler(req: IncomingMessage, res: ServerResponse) {
   // Normalize URL if Vercel sets rewrite headers
@@ -7,7 +7,8 @@ export default function handler(req: IncomingMessage, res: ServerResponse) {
     (req.headers &&
       (req.headers["x-vercel-original-url"] ||
         req.headers["x-forwarded-uri"] ||
-        req.headers["x-original-url"])) as string;
+        req.headers["x-original-url"] ||
+        req.headers["x-matched-path"])) as string;
 
   if (originalUrl && typeof originalUrl === "string") {
     req.url = originalUrl;
@@ -33,7 +34,7 @@ export default function handler(req: IncomingMessage, res: ServerResponse) {
     return;
   }
 
-  return app(req as any, res as any);
+  return (app as any)(req, res);
 }
 
 export { app };
