@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && esbuild src/server/vercel-handler.ts --bundle --platform=node --format=esm --packages=external --sourcemap --outfile=api/index.js",
+    "build": "vite build && vite build examples/database-demo --config examples/database-demo/vite.config.ts && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && esbuild src/server/vercel-handler.ts --bundle --platform=node --format=esm --packages=external --sourcemap --outfile=api/index.js",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.cjs api/index.js api/index.js.map api/\\[...path\\].js*",
     "lint": "tsc --noEmit",
@@ -17,7 +17,8 @@
     "test:sdk": "node scripts/test-database-sdk.mjs",
     "test:prod": "node scripts/test-production-database.mjs",
     "test:demo": "tsx scripts/test-demo-app.mjs",
-    "test": "npm run test:serverless && npm run test:github && npm run test:database && npm run test:external && npm run test:sdk && npm run test:security"
+    "test:routing": "node scripts/test-routing.mjs",
+    "test": "npm run test:serverless && npm run test:github && npm run test:database && npm run test:external && npm run test:sdk && npm run test:security && npm run test:routing"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

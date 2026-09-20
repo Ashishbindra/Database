@@ -10,8 +10,17 @@
       "destination": "/api"
     },
     {
-      "source": "/((?!api(?:/|$)).*)",
+      "source": "/examples/database-demo",
+      "destination": "/examples/database-demo/index.html"
+    },
+    {
+      "source": "/examples/database-demo/(.*)",
+      "destination": "/examples/database-demo/index.html"
+    },
+    {
+      "source": "/((?!api(?:/|$)|examples/database-demo(?:/|$)).*)",
       "destination": "/index.html"
     }
   ]
 }
+

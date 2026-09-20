@@ -156,6 +156,12 @@ export const Header: React.FC<{
             >
               Threat Model
             </button>
+            <a
+              href="/examples/database-demo"
+              className="px-3 py-1.5 rounded-lg transition text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 font-mono text-[11px]"
+            >
+              Demo App ↗
+            </a>
           </nav>
 
           {/* Right Action Controls */}

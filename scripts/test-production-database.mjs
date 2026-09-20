@@ -575,9 +575,26 @@ async function runProductionDatabaseTest() {
     throw err;
   }
 
-  // 20. Verify Zero Plaintext / No Server Secret Leakage
+  // 20. Verify Demo Route /examples/database-demo
+  console.log("\n20. Verifying external HTTP GET /examples/database-demo...");
+  try {
+    const demoRes = await fetch(`${cleanBaseUrl}/examples/database-demo`, {
+      method: "GET",
+    });
+    assert.strictEqual(demoRes.status, 200, `Expected HTTP 200 from /examples/database-demo, got ${demoRes.status}`);
+    const contentType = demoRes.headers.get("content-type") || "";
+    assert.ok(contentType.includes("text/html"), `Expected text/html content-type, got ${contentType}`);
+    results.demoRoute = "PASS (HTTP 200 text/html)";
+    console.log(`✓ External HTTP GET /examples/database-demo returned HTTP 200 text/html`);
+  } catch (err) {
+    results.demoRoute = `FAIL (${err.message})`;
+    console.error("✗ Demo route test failed:", err.message);
+    throw err;
+  }
+
+  // 21. Verify Zero Plaintext / No Server Secret Leakage
   results.noSecretLeakage = "PASS";
-  console.log("\n20. Verified zero secret leakage across all production endpoints");
+  console.log("\n21. Verified zero secret leakage across all production endpoints");
 
   console.log("\n==================================================");
   console.log("PRODUCTION VERIFICATION SUMMARY");

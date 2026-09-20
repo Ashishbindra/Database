@@ -155,7 +155,7 @@ export const SystemOverview: React.FC<{
           The same SDK storage system supports multiple independent applications. Data belonging to one app is cryptographically bound and isolated from other apps.
         </p>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="p-6 bg-stone-900 border border-stone-800 rounded-xl flex flex-col justify-between space-y-4">
             <div>
               <div className="flex justify-between items-start">
@@ -196,6 +196,27 @@ export const SystemOverview: React.FC<{
             >
               Open ResumeCraft App →
             </button>
+          </div>
+
+          <div className="p-6 bg-stone-900 border border-sky-500/30 rounded-xl flex flex-col justify-between space-y-4 relative overflow-hidden">
+            <div>
+              <div className="flex justify-between items-start">
+                <span className="px-2.5 py-0.5 text-xs font-mono bg-sky-500/10 text-sky-400 border border-sky-500/20 rounded-full">
+                  route: /examples/database-demo
+                </span>
+                <span className="text-[10px] font-mono text-sky-400">Standalone App</span>
+              </div>
+              <h4 className="text-base font-bold text-stone-100 mt-3">Database Demo App</h4>
+              <p className="text-xs text-stone-400 mt-1">
+                External customer CRM client consuming the production encrypted database service strictly over HTTPS REST APIs.
+              </p>
+            </div>
+            <a
+              href="/examples/database-demo"
+              className="w-full py-2 bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 text-sky-300 font-medium text-xs rounded-lg transition text-center block"
+            >
+              Open Database Demo App →
+            </a>
           </div>
         </div>
       </div>

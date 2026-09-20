@@ -13,12 +13,39 @@ async function startServer() {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
-      appType: "spa",
+      appType: "custom",
     });
     app.use(vite.middlewares);
+
+    app.get(["/examples/database-demo", "/examples/database-demo/*"], async (req: Request, res: Response, next) => {
+      try {
+        const fs = await import("fs");
+        const templatePath = path.resolve(process.cwd(), "examples/database-demo/index.html");
+        let template = fs.readFileSync(templatePath, "utf-8");
+        template = await vite.transformIndexHtml(req.originalUrl, template);
+        res.status(200).set({ "Content-Type": "text/html" }).end(template);
+      } catch (e) {
+        next(e);
+      }
+    });
+
+    app.get("*", async (req: Request, res: Response, next) => {
+      try {
+        const fs = await import("fs");
+        const templatePath = path.resolve(process.cwd(), "index.html");
+        let template = fs.readFileSync(templatePath, "utf-8");
+        template = await vite.transformIndexHtml(req.originalUrl, template);
+        res.status(200).set({ "Content-Type": "text/html" }).end(template);
+      } catch (e) {
+        next(e);
+      }
+    });
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
+    app.get(["/examples/database-demo", "/examples/database-demo/*"], (_req: Request, res: Response) => {
+      res.sendFile(path.join(distPath, "examples/database-demo/index.html"));
+    });
     app.get("*", (_req: Request, res: Response) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
