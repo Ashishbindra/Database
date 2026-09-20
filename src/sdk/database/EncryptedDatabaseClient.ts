@@ -34,13 +34,23 @@ export interface ListProjectsOptions {
 export interface ProjectItem {
   projectId: string;
   projectToken: string;
+  status?: "active" | "disabled";
   createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface RawRecordEnvelope {
+  recordId: string;
+  rawPersistedContent: string;
+  sha: string;
+  isEncrypted: boolean;
 }
 
 export interface RecordEnvelope<T = any> {
   recordId: string;
   data: T;
   sha: string;
+  updatedAt?: string;
 }
 
 export interface RecordMutationResult {
@@ -60,6 +70,50 @@ export interface CollectionResult {
 export interface ListRecordsOptions {
   filterField?: string;
   filterValue?: string | number | boolean;
+}
+
+export interface DatabaseUsageTelemetry {
+  success: boolean;
+  totalProjects: number;
+  activeProjects: number;
+  disabledProjects: number;
+  totalCollections: number;
+  totalRecords: number;
+  projects: Array<{
+    projectId: string;
+    status: string;
+    collectionsCount: number;
+    recordsCount: number;
+    lastUsedAt: string | null;
+    createdAt: string | null;
+  }>;
+  storage: {
+    provider: string;
+    owner: string;
+    repo: string;
+    branch: string;
+    isConfigured: boolean;
+  };
+  security: {
+    encryption: string;
+    keyDerivation: string;
+    concurrency: string;
+    projectIsolation: string;
+  };
+  rateLimit?: {
+    standardLimit: number;
+    windowMs: number;
+  };
+}
+
+export interface ProjectStatsResult {
+  success: boolean;
+  projectId: string;
+  collectionsCount: number;
+  totalRecords: number;
+  collections: Array<{ collection: string; recordCount: number }>;
+  collectionsBreakdown?: Record<string, number>;
+  lastUsedAt: string;
 }
 
 /**
@@ -95,6 +149,15 @@ export class EncryptedDatabaseClient {
     this.projectToken = config.projectToken;
     this.userSessionToken = config.userSessionToken;
     this.fetchFn = config.fetchFn || (typeof fetch !== "undefined" ? fetch : (globalThis as any).fetch);
+  }
+
+  public setProject(projectId: string, projectToken?: string) {
+    this.projectId = projectId;
+    this.projectToken = projectToken;
+  }
+
+  public setSessionToken(userSessionToken: string) {
+    this.userSessionToken = userSessionToken;
   }
 
   // ==========================================
@@ -168,6 +231,106 @@ export class EncryptedDatabaseClient {
     return res.projects || [];
   }
 
+  /**
+   * Updates project status (e.g. "active" or "disabled").
+   */
+  public async updateProjectStatus(projectId: string, status: "active" | "disabled"): Promise<{ success: boolean; projectId: string; status: string; message: string }> {
+    if (!this.userSessionToken) {
+      throw new DatabaseApiError(401, "Unauthorized", "User session token is required to update project status.");
+    }
+    return this.request<{ success: boolean; projectId: string; status: string; message: string }>({
+      path: `/api/db/projects/${encodeURIComponent(projectId)}/status`,
+      method: "PATCH",
+      token: this.userSessionToken,
+      body: { status },
+    });
+  }
+
+  /**
+   * Rotates a project's API token.
+   */
+  public async rotateProjectToken(projectId: string): Promise<{ success: boolean; projectId: string; projectToken: string; message: string }> {
+    if (!this.userSessionToken) {
+      throw new DatabaseApiError(401, "Unauthorized", "User session token is required to rotate project token.");
+    }
+    const res = await this.request<{ success: boolean; projectId: string; projectToken: string; message: string }>({
+      path: `/api/db/projects/${encodeURIComponent(projectId)}/token/rotate`,
+      method: "POST",
+      token: this.userSessionToken,
+    });
+    if (this.projectId === projectId) {
+      this.projectToken = res.projectToken;
+    }
+    return res;
+  }
+
+  /**
+   * Revokes a project's API token and disables the project.
+   */
+  public async revokeProjectToken(projectId: string): Promise<{ success: boolean; projectId: string; message: string }> {
+    if (!this.userSessionToken) {
+      throw new DatabaseApiError(401, "Unauthorized", "User session token is required to revoke project token.");
+    }
+    const res = await this.request<{ success: boolean; projectId: string; message: string }>({
+      path: `/api/db/projects/${encodeURIComponent(projectId)}/token/revoke`,
+      method: "POST",
+      token: this.userSessionToken,
+    });
+    if (this.projectId === projectId) {
+      this.projectToken = undefined;
+    }
+    return res;
+  }
+
+  /**
+   * Deletes a project and all its associated encrypted collections.
+   */
+  public async deleteProject(projectId: string): Promise<{ success: boolean; projectId: string; message: string }> {
+    if (!this.userSessionToken) {
+      throw new DatabaseApiError(401, "Unauthorized", "User session token is required to delete a project.");
+    }
+    const res = await this.request<{ success: boolean; projectId: string; message: string }>({
+      path: `/api/db/projects/${encodeURIComponent(projectId)}`,
+      method: "DELETE",
+      token: this.userSessionToken,
+    });
+    if (this.projectId === projectId) {
+      this.projectId = undefined;
+      this.projectToken = undefined;
+    }
+    return res;
+  }
+
+  /**
+   * Retrieves developer usage telemetry across all projects.
+   */
+  public async getUsage(): Promise<DatabaseUsageTelemetry> {
+    if (!this.userSessionToken) {
+      throw new DatabaseApiError(401, "Unauthorized", "User session token is required to get usage telemetry.");
+    }
+    return this.request<DatabaseUsageTelemetry>({
+      path: "/api/db/usage",
+      method: "GET",
+      token: this.userSessionToken,
+    });
+  }
+
+  /**
+   * Retrieves collection breakdown and record statistics for a project.
+   */
+  public async getProjectStats(projectId?: string): Promise<ProjectStatsResult> {
+    const targetProjectId = projectId || this.ensureProjectId();
+    const token = this.projectToken || this.userSessionToken;
+    if (!token) {
+      throw new DatabaseApiError(401, "Unauthorized", "Project token or user session token is required.");
+    }
+    return this.request<ProjectStatsResult>({
+      path: `/api/db/projects/${encodeURIComponent(targetProjectId)}/stats`,
+      method: "GET",
+      token,
+    });
+  }
+
   // ==========================================
   // COLLECTION MANAGEMENT
   // ==========================================
@@ -184,6 +347,20 @@ export class EncryptedDatabaseClient {
       method: "POST",
       token,
       body: { collection },
+    });
+  }
+
+  /**
+   * Deletes a collection and all its stored records in the active project.
+   */
+  public async deleteCollection(collection: string): Promise<{ success: boolean; projectId: string; collection: string; message: string }> {
+    const projectId = this.ensureProjectId();
+    const token = this.ensureProjectToken();
+
+    return this.request<{ success: boolean; projectId: string; collection: string; message: string }>({
+      path: `/api/db/projects/${encodeURIComponent(projectId)}/collections/${encodeURIComponent(collection)}`,
+      method: "DELETE",
+      token,
     });
   }
 
@@ -227,6 +404,17 @@ export class EncryptedDatabaseClient {
   }
 
   /**
+   * Alias for createRecord.
+   */
+  public async insertRecord<T = any>(
+    collection: string,
+    data: T,
+    recordId?: string
+  ): Promise<RecordMutationResult> {
+    return this.createRecord<T>(collection, data, recordId);
+  }
+
+  /**
    * Retrieves a single decrypted record by ID.
    */
   public async getRecord<T = any>(collection: string, recordId: string): Promise<RecordEnvelope<T>> {
@@ -238,6 +426,34 @@ export class EncryptedDatabaseClient {
       method: "GET",
       token,
     });
+  }
+
+  /**
+   * Retrieves the raw AES-256-GCM encrypted envelope (iv, ciphertext, tag) as persisted on GitHub.
+   */
+  public async getRawRecordEnvelope(collection: string, recordId: string): Promise<RawRecordEnvelope> {
+    const projectId = this.ensureProjectId();
+    const token = this.ensureProjectToken();
+
+    return this.request<RawRecordEnvelope>({
+      path: `/api/db/projects/${encodeURIComponent(projectId)}/collections/${encodeURIComponent(collection)}/records/${encodeURIComponent(recordId)}/raw`,
+      method: "GET",
+      token,
+    });
+  }
+
+  /**
+   * Alias for getRawRecordEnvelope.
+   */
+  public async getRawEnvelope(collection: string, recordId: string): Promise<RawRecordEnvelope> {
+    return this.getRawRecordEnvelope(collection, recordId);
+  }
+
+  /**
+   * Alias for getProjectStats.
+   */
+  public async getStats(projectId?: string): Promise<ProjectStatsResult> {
+    return this.getProjectStats(projectId);
   }
 
   /**
@@ -306,13 +522,51 @@ export class EncryptedDatabaseClient {
     return res.records || [];
   }
 
+  /**
+   * Lists records with client/server-side pagination support.
+   */
+  public async listRecordsPaginated<T = any>(
+    collection: string,
+    options?: { page?: number; limit?: number; filterField?: string; filterValue?: string }
+  ): Promise<{ records: RecordEnvelope<T>[]; total: number; page: number; limit: number; totalPages: number }> {
+    const page = Math.max(1, options?.page || 1);
+    const limit = Math.max(1, options?.limit || 20);
+    const allRecords = await this.listRecords<T>(collection, {
+      filterField: options?.filterField,
+      filterValue: options?.filterValue,
+    });
+
+    const total = allRecords.length;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const offset = (page - 1) * limit;
+    const records = allRecords.slice(offset, offset + limit);
+
+    return {
+      records,
+      total,
+      page,
+      limit,
+      totalPages,
+    };
+  }
+
+  /**
+   * Checks the health and operational status of the database API service.
+   */
+  public async checkHealth(): Promise<{ status: string; uptime?: number; timestamp: string }> {
+    return this.request<{ status: string; uptime?: number; timestamp: string }>({
+      path: "/api/health",
+      method: "GET",
+    });
+  }
+
   // ==========================================
   // INTERNAL HTTP HANDLER
   // ==========================================
 
   private async request<T>(opts: {
     path: string;
-    method: "GET" | "POST" | "PUT" | "DELETE";
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
     token?: string;
     body?: any;
   }): Promise<T> {

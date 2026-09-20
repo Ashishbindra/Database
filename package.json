@@ -16,9 +16,13 @@
     "test:external": "node scripts/test-external-client.mjs",
     "test:sdk": "node scripts/test-database-sdk.mjs",
     "test:prod": "node scripts/test-production-database.mjs",
+    "test:phase1": "node scripts/test-phase1-dashboard-api.mjs",
+    "test:phase2": "node scripts/test-phase2-public-api.mjs",
+    "test:phase3": "node scripts/test-phase3-developer-experience.mjs",
+    "test:phase4": "node scripts/test-phase4-production-audit.mjs",
     "test:demo": "tsx scripts/test-demo-app.mjs",
     "test:routing": "node scripts/test-routing.mjs",
-    "test": "npm run test:serverless && npm run test:github && npm run test:database && npm run test:external && npm run test:sdk && npm run test:security && npm run test:routing"
+    "test": "npm run test:serverless && npm run test:github && npm run test:database && npm run test:external && npm run test:sdk && npm run test:phase1 && npm run test:phase2 && npm run test:phase3 && npm run test:phase4 && npm run test:security && npm run test:routing"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

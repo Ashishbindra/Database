@@ -117,6 +117,14 @@ export const Header: React.FC<{
               System Overview
             </button>
             <button
+              onClick={() => setActiveView("database")}
+              className={`px-3 py-1.5 rounded-lg transition ${
+                activeView === "database" ? "bg-amber-500/20 text-amber-300 font-semibold" : "text-stone-400 hover:text-stone-200"
+              }`}
+            >
+              Database Dashboard
+            </button>
+            <button
               onClick={() => setActiveView("shramik")}
               className={`px-3 py-1.5 rounded-lg transition ${
                 activeView === "shramik" ? "bg-amber-500/20 text-amber-300 font-semibold" : "text-stone-400 hover:text-stone-200"

@@ -216,12 +216,42 @@ function getGitHubHeaders(pat: string) {
 
 // Rate Limiting & Session Storage
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+const tokenLastUsedMap = new Map<string, string>();
 
 // In-Memory Fallback Storage Mock for Local Server Execution when GITHUB_PAT is not supplied
 const serverLocalVault = new Map<string, { content: string; sha: string; updatedAt: string }>();
 
-// Middleware: Express JSON Parser & Body Limits
+// Middleware: Express JSON Parser & Body Limits (Strict 5MB limit with graceful 413 handling)
 app.use(express.json({ limit: "5mb" }));
+
+// Handle JSON syntax parsing errors & payload limit errors gracefully
+app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
+  if (err && (err.type === "entity.too.large" || err.status === 413 || err.statusCode === 413)) {
+    return res.status(413).json({
+      success: false,
+      error: "Payload Too Large",
+      message: "Request payload exceeds the maximum allowed size limit of 5MB.",
+      statusCode: 413,
+    });
+  }
+  if (err instanceof SyntaxError && "body" in err) {
+    return res.status(400).json({
+      success: false,
+      error: "Bad Request",
+      message: "Malformed JSON payload in request body.",
+      statusCode: 400,
+    });
+  }
+  if (err) {
+    return res.status(err.status || 500).json({
+      success: false,
+      error: err.error || "Internal Server Error",
+      message: err.message || "An unexpected error occurred.",
+      statusCode: err.status || 500,
+    });
+  }
+  next();
+});
 
 // Middleware: Security Headers
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -229,6 +259,15 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+
+  // Standard CORS setup
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Project-Token, X-Requested-With, Accept");
+
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
 
   const host = req.headers.host || "";
   const isDev =
@@ -272,12 +311,17 @@ function getClientIp(req: Request): string {
 }
 
 // Middleware: Rate Limiter
-function rateLimiter(maxRequests = 60, windowMs = 60000) {
+function rateLimiter(maxRequests = 120, windowMs = 60000) {
   return (req: Request, res: Response, next: NextFunction) => {
     const ip = getClientIp(req);
 
-    // Bypass rate limiting on loopback / localhost to prevent test suite rate limiting
+    // Set standard rate limit headers on every response
+    res.setHeader("X-RateLimit-Limit", String(maxRequests));
+
+    // Bypass rate limiting counting on loopback / localhost to prevent test suite rate limiting
     if (ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1" || ip.includes("127.0.0.1") || ip === "serverless-client") {
+      res.setHeader("X-RateLimit-Remaining", String(maxRequests));
+      res.setHeader("X-RateLimit-Reset", String(Math.ceil((Date.now() + windowMs) / 1000)));
       return next();
     }
 
@@ -286,8 +330,14 @@ function rateLimiter(maxRequests = 60, windowMs = 60000) {
 
     if (!record || now > record.resetTime) {
       rateLimitMap.set(ip, { count: 1, resetTime: now + windowMs });
+      res.setHeader("X-RateLimit-Remaining", String(maxRequests - 1));
+      res.setHeader("X-RateLimit-Reset", String(Math.ceil((now + windowMs) / 1000)));
       return next();
     }
+
+    const remaining = Math.max(0, maxRequests - record.count);
+    res.setHeader("X-RateLimit-Remaining", String(remaining));
+    res.setHeader("X-RateLimit-Reset", String(Math.ceil(record.resetTime / 1000)));
 
     if (record.count >= maxRequests) {
       return res.status(429).json({
@@ -300,6 +350,9 @@ function rateLimiter(maxRequests = 60, windowMs = 60000) {
     next();
   };
 }
+
+// Apply rate limiter globally
+app.use(rateLimiter(120, 60000));
 
 async function verifyGitHubRepository(): Promise<{ valid: boolean; status: number; message: string }> {
   const pat = getGitHubPat();
@@ -457,7 +510,7 @@ async function githubStoragePut(filePath: string, contentStr: string, commitMsg:
       const entry = serverLocalVault.get(cleanPath);
       const currentSha = entry ? entry.sha : undefined;
       if (currentSha !== expectedSha) {
-        throw { status: 409, message: "409 Conflict: Remote version updated concurrently." };
+        throw { status: 409, error: "Conflict", message: "409 Conflict: Remote version updated concurrently." };
       }
     }
     const sha = crypto.createHash("sha256").update(contentStr).digest("hex");
@@ -1231,24 +1284,24 @@ function dbGenerateHmacHex(secret: string, data: string): string {
 // 1. Strict Path Validation to enforce exact structure & prevent path traversal
 function validateDbPath(projectId: string, collection: string, recordId?: string): string {
   const validPattern = /^[a-zA-Z0-9_-]+$/;
-  if (!validPattern.test(projectId)) {
-    throw { status: 400, message: "Invalid project ID format." };
+  if (!projectId || projectId.length > 64 || !validPattern.test(projectId)) {
+    throw { status: 400, error: "Invalid Request", message: "Invalid project ID: must be 1-64 alphanumeric characters, hyphens, or underscores." };
   }
-  if (!validPattern.test(collection)) {
-    throw { status: 400, message: "Invalid collection name format." };
+  if (!collection || collection.length > 64 || !validPattern.test(collection)) {
+    throw { status: 400, error: "Invalid Request", message: "Invalid collection name: must be 1-64 alphanumeric characters, hyphens, or underscores." };
   }
-  if (recordId && !validPattern.test(recordId)) {
-    throw { status: 400, message: "Invalid record ID format." };
+  if (recordId && (recordId.length > 128 || !validPattern.test(recordId))) {
+    throw { status: 400, error: "Invalid Request", message: "Invalid record ID: must be 1-128 alphanumeric characters, hyphens, or underscores." };
   }
 
   if (projectId.includes("..") || projectId.includes("/") || projectId.includes("\\") || projectId.includes("\0")) {
-    throw { status: 400, message: "Path traversal violation in projectId." };
+    throw { status: 400, error: "Invalid Request", message: "Path traversal violation in projectId." };
   }
   if (collection.includes("..") || collection.includes("/") || collection.includes("\\") || collection.includes("\0")) {
-    throw { status: 400, message: "Path traversal violation in collection." };
+    throw { status: 400, error: "Invalid Request", message: "Path traversal violation in collection." };
   }
   if (recordId && (recordId.includes("..") || recordId.includes("/") || recordId.includes("\\") || recordId.includes("\0"))) {
-    throw { status: 400, message: "Path traversal violation in recordId." };
+    throw { status: 400, error: "Invalid Request", message: "Path traversal violation in recordId." };
   }
 
   let targetPath = `data/apps/${projectId}/collections/${collection}/records`;
@@ -1256,14 +1309,14 @@ function validateDbPath(projectId: string, collection: string, recordId?: string
     targetPath += `/${recordId}.json`;
   }
 
-  const normalized = path.normalize(targetPath);
+  const normalized = path.normalize(targetPath).replace(/\\/g, "/");
   if (normalized.startsWith("..") || normalized.startsWith("/") || normalized.startsWith("\\")) {
-    throw { status: 400, message: "Normalized path escape violation." };
+    throw { status: 400, error: "Invalid Request", message: "Normalized path escape violation." };
   }
 
   const expectedPrefix = `data/apps/${projectId}/collections/${collection}/records`;
   if (!normalized.startsWith(expectedPrefix)) {
-    throw { status: 403, message: "Access forbidden: path breakout detected." };
+    throw { status: 403, error: "Forbidden", message: "Access forbidden: path breakout detected." };
   }
 
   return normalized;
@@ -1285,13 +1338,20 @@ function encryptRecord(plainText: string, projectId: string): string {
 }
 
 function decryptRecord(encryptedJson: string, projectId: string): string {
-  const { iv, ciphertext, tag } = JSON.parse(encryptedJson);
-  const key = crypto.createHmac("sha256", getSessionSecret()).update(projectId).digest();
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(iv, "hex"));
-  decipher.setAuthTag(Buffer.from(tag, "hex"));
-  let decrypted = decipher.update(ciphertext, "hex", "utf8");
-  decrypted += decipher.final("utf8");
-  return decrypted;
+  try {
+    const { iv, ciphertext, tag } = JSON.parse(encryptedJson);
+    if (!iv || !ciphertext || !tag) {
+      throw new Error("Invalid envelope format");
+    }
+    const key = crypto.createHmac("sha256", getSessionSecret()).update(projectId).digest();
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(iv, "hex"));
+    decipher.setAuthTag(Buffer.from(tag, "hex"));
+    let decrypted = decipher.update(ciphertext, "hex", "utf8");
+    decrypted += decipher.final("utf8");
+    return decrypted;
+  } catch {
+    throw { status: 422, error: "Decryption Failed", message: "Failed to authenticate or decrypt record payload." };
+  }
 }
 
 // 3. Database Folder list helper (mock vs GitHub)
@@ -1366,6 +1426,29 @@ async function requireProjectAuth(req: Request, res: Response, next: NextFunctio
       return res.status(401).json({ error: "Unauthorized", message: "Invalid project token payload." });
     }
 
+    // Check project status & token revocation in projects.json
+    try {
+      const projectsPath = `data/users/${payload.opaqueUserId}/projects.json`;
+      const fileData = await serverGitHubClient.getFile(projectsPath);
+      if (fileData) {
+        const parsed = JSON.parse(fileData.content);
+        const proj = (parsed.projects || []).find((p: any) => p.projectId === payload.projectId);
+        if (proj) {
+          if (proj.status === "disabled") {
+            return res.status(403).json({ error: "Forbidden", message: "Project is disabled." });
+          }
+          if (proj.projectToken && proj.projectToken !== token) {
+            return res.status(403).json({ error: "Forbidden", message: "Project token has been rotated or revoked." });
+          }
+        }
+      }
+    } catch {
+      // If error or file not found, continue with HMAC validated session
+    }
+
+    // Record last used timestamp safely
+    tokenLastUsedMap.set(`${payload.opaqueUserId}:${payload.projectId}`, new Date().toISOString());
+
     (req as any).projectSession = {
       projectId: payload.projectId,
       opaqueUserId: payload.opaqueUserId,
@@ -1387,8 +1470,8 @@ app.post("/api/db/projects", requireAuth, async (req: Request, res: Response) =>
       return res.status(400).json({ error: "Invalid Request", message: "projectId is required." });
     }
 
-    if (!/^[a-zA-Z0-9_-]+$/.test(projectId)) {
-      return res.status(400).json({ error: "Invalid Request", message: "Invalid project ID format." });
+    if (!/^[a-zA-Z0-9_-]+$/.test(projectId) || projectId.length > 64) {
+      return res.status(400).json({ error: "Invalid Request", message: "Invalid project ID: must be 1-64 alphanumeric characters, hyphens, or underscores." });
     }
 
     const opaqueUserId = session.opaqueUserId;
@@ -1424,7 +1507,9 @@ app.post("/api/db/projects", requireAuth, async (req: Request, res: Response) =>
     projectsList.push({
       projectId,
       projectToken,
-      createdAt: new Date().toISOString()
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     });
 
     const contentStr = JSON.stringify({ projects: projectsList }, null, 2);
@@ -1434,10 +1519,85 @@ app.post("/api/db/projects", requireAuth, async (req: Request, res: Response) =>
       success: true,
       projectId,
       projectToken,
+      status: "active",
       message: "Project created successfully."
     });
   } catch (err: any) {
     return res.status(500).json({ error: "Project Creation Failed", message: err.message });
+  }
+});
+
+// 5.1b GET /api/db/usage (Developer Usage Telemetry)
+app.get("/api/db/usage", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).session;
+    const opaqueUserId = session.opaqueUserId;
+    const projectsPath = `data/users/${opaqueUserId}/projects.json`;
+
+    let projectsList: any[] = [];
+    try {
+      const fileData = await serverGitHubClient.getFile(projectsPath);
+      if (fileData) {
+        const parsed = JSON.parse(fileData.content);
+        projectsList = parsed.projects || [];
+      }
+    } catch {
+      // ignore
+    }
+
+    let totalCollections = 0;
+    let totalRecords = 0;
+    const projectStats: any[] = [];
+
+    for (const proj of projectsList) {
+      const prefix = `data/apps/${proj.projectId}/collections/`;
+      const files = await listDatabaseFiles(prefix);
+      const cols = new Set<string>();
+      let recCount = 0;
+      for (const f of files) {
+        const sub = f.path.substring(prefix.length);
+        const parts = sub.split("/");
+        if (parts[0]) cols.add(parts[0]);
+        if (f.path.endsWith(".json") && f.path.includes("/records/")) {
+          recCount++;
+        }
+      }
+      totalCollections += cols.size;
+      totalRecords += recCount;
+      projectStats.push({
+        projectId: proj.projectId,
+        status: proj.status || "active",
+        collectionsCount: cols.size,
+        recordsCount: recCount,
+        lastUsedAt: tokenLastUsedMap.get(`${opaqueUserId}:${proj.projectId}`) || proj.lastUsedAt || null,
+        createdAt: proj.createdAt || null,
+      });
+    }
+
+    return res.json({
+      success: true,
+      totalProjects: projectsList.length,
+      activeProjects: projectsList.filter(p => p.status !== "disabled").length,
+      disabledProjects: projectsList.filter(p => p.status === "disabled").length,
+      totalCollections,
+      totalRecords,
+      projects: projectStats,
+      storage: {
+        provider: "github",
+        owner: getGitHubOwner(),
+        repo: getGitHubRepo(),
+        branch: getGitHubBranch(),
+        isConfigured: Boolean(getGitHubPat()),
+      },
+      security: {
+        encryption: "AES-256-GCM",
+        keyDerivation: "PBKDF2-HMAC-SHA256",
+        concurrency: "Optimistic Blob SHA verification",
+        projectIsolation: "data/apps/{projectId}/ Scoped Boundaries",
+      }
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Usage Telemetry Failed", message: err.message });
   }
 });
 
@@ -1453,7 +1613,11 @@ app.get("/api/db/projects", requireAuth, async (req: Request, res: Response) => 
       const fileData = await serverGitHubClient.getFile(projectsPath);
       if (fileData) {
         const parsed = JSON.parse(fileData.content);
-        projectsList = parsed.projects || [];
+        projectsList = (parsed.projects || []).map((p: any) => ({
+          ...p,
+          status: p.status || "active",
+          lastUsedAt: tokenLastUsedMap.get(`${opaqueUserId}:${p.projectId}`) || p.lastUsedAt || null,
+        }));
       }
     } catch (e) {
       // ignore
@@ -1462,6 +1626,251 @@ app.get("/api/db/projects", requireAuth, async (req: Request, res: Response) => 
     return res.json({ projects: projectsList });
   } catch (err: any) {
     return res.status(500).json({ error: "Failed to list projects", message: err.message });
+  }
+});
+
+// 5.2b GET /api/db/projects/:projectId/stats (Project Statistics)
+app.get("/api/db/projects/:projectId/stats", requireProjectAuth, async (req: Request, res: Response) => {
+  try {
+    const { projectId } = req.params;
+    const projectSession = (req as any).projectSession;
+
+    if (projectSession.projectId !== projectId) {
+      return res.status(403).json({ error: "Forbidden", message: "Access forbidden to requested project." });
+    }
+
+    const prefix = `data/apps/${projectId}/collections/`;
+    const files = await listDatabaseFiles(prefix);
+
+    const collectionsBreakdown: Record<string, number> = {};
+    for (const f of files) {
+      const sub = f.path.substring(prefix.length);
+      const parts = sub.split("/");
+      const colName = parts[0];
+      if (colName) {
+        if (collectionsBreakdown[colName] === undefined) {
+          collectionsBreakdown[colName] = 0;
+        }
+        if (f.path.endsWith(".json") && f.path.includes("/records/")) {
+          collectionsBreakdown[colName]++;
+        }
+      }
+    }
+
+    const cols = Object.keys(collectionsBreakdown);
+    const totalRecs = Object.values(collectionsBreakdown).reduce((a, b) => a + b, 0);
+
+    return res.json({
+      success: true,
+      projectId,
+      collectionsCount: cols.length,
+      totalRecords: totalRecs,
+      collections: cols.map(c => ({ collection: c, recordCount: collectionsBreakdown[c] })),
+      lastUsedAt: tokenLastUsedMap.get(`${projectSession.opaqueUserId}:${projectId}`) || new Date().toISOString(),
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Failed to retrieve project stats", message: err.message });
+  }
+});
+
+// 5.3 PATCH /api/db/projects/:projectId/status (Update project status)
+app.patch("/api/db/projects/:projectId/status", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).session;
+    const { projectId } = req.params;
+    const { status } = req.body;
+
+    if (!status || !["active", "disabled"].includes(status)) {
+      return res.status(400).json({ error: "Invalid Request", message: "Status must be 'active' or 'disabled'." });
+    }
+
+    const opaqueUserId = session.opaqueUserId;
+    const projectsPath = `data/users/${opaqueUserId}/projects.json`;
+
+    let projectsList: any[] = [];
+    let fileSha: string | undefined = undefined;
+    try {
+      const fileData = await serverGitHubClient.getFile(projectsPath);
+      if (fileData) {
+        const parsed = JSON.parse(fileData.content);
+        projectsList = parsed.projects || [];
+        fileSha = fileData.sha;
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    const projectIndex = projectsList.findIndex(p => p.projectId === projectId);
+    if (projectIndex === -1) {
+      return res.status(404).json({ error: "Not Found", message: "Project not found." });
+    }
+
+    projectsList[projectIndex].status = status;
+    projectsList[projectIndex].updatedAt = new Date().toISOString();
+
+    const contentStr = JSON.stringify({ projects: projectsList }, null, 2);
+    await githubStoragePut(projectsPath, contentStr, `Update project status: ${projectId} -> ${status}`, fileSha);
+
+    return res.json({
+      success: true,
+      projectId,
+      status,
+      message: `Project status updated to ${status}.`
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Status Update Failed", message: err.message });
+  }
+});
+
+// 5.4 POST /api/db/projects/:projectId/token/rotate (Rotate project API token)
+app.post("/api/db/projects/:projectId/token/rotate", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).session;
+    const { projectId } = req.params;
+    const opaqueUserId = session.opaqueUserId;
+    const projectsPath = `data/users/${opaqueUserId}/projects.json`;
+
+    let projectsList: any[] = [];
+    let fileSha: string | undefined = undefined;
+    try {
+      const fileData = await serverGitHubClient.getFile(projectsPath);
+      if (fileData) {
+        const parsed = JSON.parse(fileData.content);
+        projectsList = parsed.projects || [];
+        fileSha = fileData.sha;
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    const projectIndex = projectsList.findIndex(p => p.projectId === projectId);
+    if (projectIndex === -1) {
+      return res.status(404).json({ error: "Not Found", message: "Project not found." });
+    }
+
+    const tokenPayload = {
+      projectId,
+      opaqueUserId,
+      issuedAt: Date.now(),
+      nonce: crypto.randomBytes(8).toString("hex")
+    };
+    const payloadStr = JSON.stringify(tokenPayload);
+    const hmac = dbGenerateHmacHex(getSessionSecret(), payloadStr);
+    const projectToken = dbStringToBase64Url(payloadStr) + "." + hmac;
+
+    projectsList[projectIndex].projectToken = projectToken;
+    projectsList[projectIndex].status = "active";
+    projectsList[projectIndex].updatedAt = new Date().toISOString();
+
+    const contentStr = JSON.stringify({ projects: projectsList }, null, 2);
+    await githubStoragePut(projectsPath, contentStr, `Rotate token for project: ${projectId}`, fileSha);
+
+    return res.json({
+      success: true,
+      projectId,
+      projectToken,
+      message: "Project API token rotated successfully."
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Token Rotation Failed", message: err.message });
+  }
+});
+
+// 5.5 POST /api/db/projects/:projectId/token/revoke (Revoke project API token)
+app.post("/api/db/projects/:projectId/token/revoke", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).session;
+    const { projectId } = req.params;
+    const opaqueUserId = session.opaqueUserId;
+    const projectsPath = `data/users/${opaqueUserId}/projects.json`;
+
+    let projectsList: any[] = [];
+    let fileSha: string | undefined = undefined;
+    try {
+      const fileData = await serverGitHubClient.getFile(projectsPath);
+      if (fileData) {
+        const parsed = JSON.parse(fileData.content);
+        projectsList = parsed.projects || [];
+        fileSha = fileData.sha;
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    const projectIndex = projectsList.findIndex(p => p.projectId === projectId);
+    if (projectIndex === -1) {
+      return res.status(404).json({ error: "Not Found", message: "Project not found." });
+    }
+
+    projectsList[projectIndex].projectToken = "";
+    projectsList[projectIndex].status = "disabled";
+    projectsList[projectIndex].updatedAt = new Date().toISOString();
+
+    const contentStr = JSON.stringify({ projects: projectsList }, null, 2);
+    await githubStoragePut(projectsPath, contentStr, `Revoke token for project: ${projectId}`, fileSha);
+
+    return res.json({
+      success: true,
+      projectId,
+      message: "Project API token revoked and project disabled."
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Token Revocation Failed", message: err.message });
+  }
+});
+
+// 5.6 DELETE /api/db/projects/:projectId (Delete project)
+app.delete("/api/db/projects/:projectId", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).session;
+    const { projectId } = req.params;
+    const opaqueUserId = session.opaqueUserId;
+    const projectsPath = `data/users/${opaqueUserId}/projects.json`;
+
+    let projectsList: any[] = [];
+    let fileSha: string | undefined = undefined;
+    try {
+      const fileData = await serverGitHubClient.getFile(projectsPath);
+      if (fileData) {
+        const parsed = JSON.parse(fileData.content);
+        projectsList = parsed.projects || [];
+        fileSha = fileData.sha;
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    const projectIndex = projectsList.findIndex(p => p.projectId === projectId);
+    if (projectIndex === -1) {
+      return res.status(404).json({ error: "Not Found", message: "Project not found." });
+    }
+
+    // Clean up collection files for this project
+    try {
+      const prefix = `data/apps/${projectId}/`;
+      const files = await listDatabaseFiles(prefix);
+      for (const file of files) {
+        try {
+          await githubStorageDeleteFile(file.path, file.sha, `Delete project ${projectId} file: ${file.path}`);
+        } catch (e) {
+          // ignore individual deletion errors
+        }
+      }
+    } catch (e) {
+      // ignore listing errors
+    }
+
+    projectsList.splice(projectIndex, 1);
+    const contentStr = JSON.stringify({ projects: projectsList }, null, 2);
+    await githubStoragePut(projectsPath, contentStr, `Delete project: ${projectId}`, fileSha);
+
+    return res.json({
+      success: true,
+      projectId,
+      message: "Project deleted successfully."
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Project Deletion Failed", message: err.message });
   }
 });
 
@@ -1481,9 +1890,7 @@ app.post("/api/db/projects/:projectId/collections", requireProjectAuth, async (r
       return res.status(400).json({ error: "Invalid Request", message: "Collection parameter is required." });
     }
 
-    if (!/^[a-zA-Z0-9_-]+$/.test(collection)) {
-      return res.status(400).json({ error: "Invalid Request", message: "Invalid collection name format." });
-    }
+    validateDbPath(projectId, collection);
 
     const placeholderPath = `data/apps/${projectId}/collections/${collection}/.placeholder`;
     await githubStoragePut(placeholderPath, JSON.stringify({ created: true }), `Create collection: ${collection}`);
@@ -1495,7 +1902,47 @@ app.post("/api/db/projects/:projectId/collections", requireProjectAuth, async (r
       message: "Collection created successfully."
     });
   } catch (err: any) {
-    return res.status(500).json({ error: "Collection Creation Failed", message: err.message });
+    const status = err.status || 500;
+    return res.status(status).json({ error: err.error || "Collection Creation Failed", message: err.message });
+  }
+});
+
+// 6.1b DELETE /api/db/projects/:projectId/collections/:collection (Delete collection)
+app.delete("/api/db/projects/:projectId/collections/:collection", requireProjectAuth, async (req: Request, res: Response) => {
+  try {
+    const { projectId, collection } = req.params;
+    const projectSession = (req as any).projectSession;
+
+    if (projectSession.projectId !== projectId) {
+      return res.status(403).json({ error: "Forbidden", message: "Access forbidden to requested project." });
+    }
+
+    if (!collection || !/^[a-zA-Z0-9_-]+$/.test(collection)) {
+      return res.status(400).json({ error: "Invalid Request", message: "Invalid collection name format." });
+    }
+
+    validateDbPath(projectId, collection);
+
+    const prefix = `data/apps/${projectId}/collections/${collection}/`;
+    const files = await listDatabaseFiles(prefix);
+
+    for (const f of files) {
+      try {
+        await githubStorageDeleteFile(f.path, f.sha, `Delete collection ${collection} file: ${f.path}`);
+      } catch (e) {
+        // ignore individual file deletion errors
+      }
+    }
+
+    return res.json({
+      success: true,
+      projectId,
+      collection,
+      message: `Collection '${collection}' and its records deleted successfully.`
+    });
+  } catch (err: any) {
+    const status = err.status || 500;
+    return res.status(status).json({ error: err.error || "Collection Deletion Failed", message: err.message });
   }
 });
 
@@ -1708,7 +2155,7 @@ app.put("/api/db/projects/:projectId/collections/:collection/records/:recordId",
     });
   } catch (err: any) {
     const status = err.status || 500;
-    return res.status(status).json({ error: err.error || "Update Failed", message: err.message });
+    return res.status(status).json({ error: err.error || (status === 409 ? "Conflict" : "Update Failed"), message: err.message });
   }
 });
 

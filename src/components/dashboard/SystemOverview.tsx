@@ -155,7 +155,28 @@ export const SystemOverview: React.FC<{
           The same SDK storage system supports multiple independent applications. Data belonging to one app is cryptographically bound and isolated from other apps.
         </p>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="p-6 bg-stone-900 border border-amber-500/30 rounded-xl flex flex-col justify-between space-y-4">
+            <div>
+              <div className="flex justify-between items-start">
+                <span className="px-2.5 py-0.5 text-xs font-mono bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-full">
+                  Developer Portal
+                </span>
+                <span className="text-[10px] font-mono text-amber-400">Phase 1</span>
+              </div>
+              <h4 className="text-base font-bold text-stone-100 mt-3">Database Dashboard</h4>
+              <p className="text-xs text-stone-400 mt-1">
+                Full developer control plane: manage projects, rotate API tokens, create collections, inspect raw Git envelopes, and query documents.
+              </p>
+            </div>
+            <button
+              onClick={() => onNavigateToApp("database")}
+              className="w-full py-2 bg-amber-500 hover:bg-amber-400 text-stone-950 font-semibold text-xs rounded-lg transition"
+            >
+              Open Database Dashboard →
+            </button>
+          </div>
+
           <div className="p-6 bg-stone-900 border border-stone-800 rounded-xl flex flex-col justify-between space-y-4">
             <div>
               <div className="flex justify-between items-start">

@@ -11,6 +11,7 @@ import { ResumeCraftApp } from "./components/apps/resume-craft/ResumeCraftApp";
 import { RemoteStorageInspector } from "./components/dashboard/RemoteStorageInspector";
 import { SecurityTestsView } from "./components/dashboard/SecurityTestsView";
 import { ThreatModelView } from "./components/dashboard/ThreatModelView";
+import { DeveloperDatabaseDashboard } from "./components/database-dashboard/DeveloperDatabaseDashboard";
 import { GithubConfigModal } from "./components/dashboard/GithubConfigModal";
 import { ShieldCheck, GitBranch, Lock, Cpu } from "lucide-react";
 
@@ -61,6 +62,8 @@ export default function App() {
             onNavigateToApp={(appId) => setActiveView(appId)}
           />
         )}
+
+        {activeView === "database" && <DeveloperDatabaseDashboard sdk={sdk} />}
 
         {activeView === "shramik" && <ShramikHisabApp sdk={sdk} />}
 

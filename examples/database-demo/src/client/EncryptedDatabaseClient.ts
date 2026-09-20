@@ -17,7 +17,16 @@ export interface DatabaseClientConfig {
 export interface ProjectItem {
   projectId: string;
   projectToken: string;
+  status?: "active" | "disabled";
   createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface RawRecordEnvelope {
+  recordId: string;
+  rawPersistedContent: string;
+  sha: string;
+  isEncrypted: boolean;
 }
 
 export interface RecordEnvelope<T = any> {
@@ -125,6 +134,64 @@ export class EncryptedDatabaseClient {
     return res.projects || [];
   }
 
+  public async updateProjectStatus(projectId: string, status: "active" | "disabled"): Promise<{ success: boolean; projectId: string; status: string; message: string }> {
+    if (!this.userSessionToken) {
+      throw new DatabaseApiError(401, "Unauthorized", "User session token is required to update project status.");
+    }
+    return this.request<{ success: boolean; projectId: string; status: string; message: string }>({
+      path: `/api/db/projects/${encodeURIComponent(projectId)}/status`,
+      method: "PATCH",
+      token: this.userSessionToken,
+      body: { status },
+    });
+  }
+
+  public async rotateProjectToken(projectId: string): Promise<{ success: boolean; projectId: string; projectToken: string; message: string }> {
+    if (!this.userSessionToken) {
+      throw new DatabaseApiError(401, "Unauthorized", "User session token is required to rotate project token.");
+    }
+    const res = await this.request<{ success: boolean; projectId: string; projectToken: string; message: string }>({
+      path: `/api/db/projects/${encodeURIComponent(projectId)}/token/rotate`,
+      method: "POST",
+      token: this.userSessionToken,
+    });
+    if (this.projectId === projectId) {
+      this.projectToken = res.projectToken;
+    }
+    return res;
+  }
+
+  public async revokeProjectToken(projectId: string): Promise<{ success: boolean; projectId: string; message: string }> {
+    if (!this.userSessionToken) {
+      throw new DatabaseApiError(401, "Unauthorized", "User session token is required to revoke project token.");
+    }
+    const res = await this.request<{ success: boolean; projectId: string; message: string }>({
+      path: `/api/db/projects/${encodeURIComponent(projectId)}/token/revoke`,
+      method: "POST",
+      token: this.userSessionToken,
+    });
+    if (this.projectId === projectId) {
+      this.projectToken = undefined;
+    }
+    return res;
+  }
+
+  public async deleteProject(projectId: string): Promise<{ success: boolean; projectId: string; message: string }> {
+    if (!this.userSessionToken) {
+      throw new DatabaseApiError(401, "Unauthorized", "User session token is required to delete a project.");
+    }
+    const res = await this.request<{ success: boolean; projectId: string; message: string }>({
+      path: `/api/db/projects/${encodeURIComponent(projectId)}`,
+      method: "DELETE",
+      token: this.userSessionToken,
+    });
+    if (this.projectId === projectId) {
+      this.projectId = undefined;
+      this.projectToken = undefined;
+    }
+    return res;
+  }
+
   public async createCollection(collection: string): Promise<CollectionResult> {
     const projectId = this.ensureProjectId();
     const token = this.ensureProjectToken();
@@ -134,6 +201,17 @@ export class EncryptedDatabaseClient {
       method: "POST",
       token,
       body: { collection },
+    });
+  }
+
+  public async deleteCollection(collection: string): Promise<{ success: boolean; projectId: string; collection: string; message: string }> {
+    const projectId = this.ensureProjectId();
+    const token = this.ensureProjectToken();
+
+    return this.request<{ success: boolean; projectId: string; collection: string; message: string }>({
+      path: `/api/db/projects/${encodeURIComponent(projectId)}/collections/${encodeURIComponent(collection)}`,
+      method: "DELETE",
+      token,
     });
   }
 
@@ -171,6 +249,17 @@ export class EncryptedDatabaseClient {
 
     return this.request<RecordEnvelope<T>>({
       path: `/api/db/projects/${encodeURIComponent(projectId)}/collections/${encodeURIComponent(collection)}/records/${encodeURIComponent(recordId)}`,
+      method: "GET",
+      token,
+    });
+  }
+
+  public async getRawRecordEnvelope(collection: string, recordId: string): Promise<RawRecordEnvelope> {
+    const projectId = this.ensureProjectId();
+    const token = this.ensureProjectToken();
+
+    return this.request<RawRecordEnvelope>({
+      path: `/api/db/projects/${encodeURIComponent(projectId)}/collections/${encodeURIComponent(collection)}/records/${encodeURIComponent(recordId)}/raw`,
       method: "GET",
       token,
     });
@@ -235,7 +324,7 @@ export class EncryptedDatabaseClient {
 
   private async request<T>(opts: {
     path: string;
-    method: "GET" | "POST" | "PUT" | "DELETE";
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
     token?: string;
     body?: any;
   }): Promise<T> {
