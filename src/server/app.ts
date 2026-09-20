@@ -1648,6 +1648,40 @@ app.get("/api/db/projects/:projectId/collections/:collection/records/:recordId",
   }
 });
 
+// 6.5b GET /api/db/projects/:projectId/collections/:collection/records/:recordId/raw (Inspect raw encrypted envelope)
+app.get("/api/db/projects/:projectId/collections/:collection/records/:recordId/raw", requireProjectAuth, async (req: Request, res: Response) => {
+  try {
+    const { projectId, collection, recordId } = req.params;
+    const projectSession = (req as any).projectSession;
+
+    if (projectSession.projectId !== projectId) {
+      return res.status(403).json({ error: "Forbidden", message: "Access forbidden to requested project." });
+    }
+
+    const targetPath = validateDbPath(projectId, collection, recordId);
+
+    let fileData: any;
+    try {
+      fileData = await githubStorageGet(targetPath);
+    } catch (err: any) {
+      if (err.status === 404 || err.message === "File not found") {
+        return res.status(404).json({ error: "Not Found", message: "Record not found." });
+      }
+      throw err;
+    }
+
+    return res.json({
+      recordId,
+      rawPersistedContent: fileData.content,
+      sha: fileData.sha,
+      isEncrypted: true
+    });
+  } catch (err: any) {
+    const status = err.status || 500;
+    return res.status(status).json({ error: err.error || "Retrieval Failed", message: err.message });
+  }
+});
+
 // 6.6 PUT /api/db/projects/:projectId/collections/:collection/records/:recordId (Update record)
 app.put("/api/db/projects/:projectId/collections/:collection/records/:recordId", requireProjectAuth, async (req: Request, res: Response) => {
   try {
@@ -1825,14 +1859,16 @@ app.get(["/api/vault/tree", "/vault/tree", "/tree"], requireAuth, async (req: Re
     console.log(`Response item/file count: ${rawTree.length}`);
     console.log("-------------------------------");
 
-    // Filter to only include files and directories under data/users/ and data/users_index/
+    // Filter to only include files and directories under data/users/, data/users_index/, and data/apps/
     const filteredTree = rawTree
       .filter((item: any) => {
         return (
           item.path.startsWith("data/users/") ||
           item.path.startsWith("data/users_index/") ||
+          item.path.startsWith("data/apps/") ||
           item.path === "data/users" ||
-          item.path === "data/users_index"
+          item.path === "data/users_index" ||
+          item.path === "data/apps"
         );
       })
       .map((item: any) => ({

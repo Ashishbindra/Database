@@ -5,7 +5,7 @@ import path from "path";
 export { app };
 export default app;
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 // Start Express + Vite Dev or Production Server
 async function startServer() {

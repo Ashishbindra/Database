@@ -7351,6 +7351,34 @@ app.get("/api/db/projects/:projectId/collections/:collection/records/:recordId",
     return res.status(status).json({ error: err.error || "Retrieval Failed", message: err.message });
   }
 });
+app.get("/api/db/projects/:projectId/collections/:collection/records/:recordId/raw", requireProjectAuth, async (req, res) => {
+  try {
+    const { projectId, collection, recordId } = req.params;
+    const projectSession = req.projectSession;
+    if (projectSession.projectId !== projectId) {
+      return res.status(403).json({ error: "Forbidden", message: "Access forbidden to requested project." });
+    }
+    const targetPath = validateDbPath(projectId, collection, recordId);
+    let fileData;
+    try {
+      fileData = await githubStorageGet(targetPath);
+    } catch (err) {
+      if (err.status === 404 || err.message === "File not found") {
+        return res.status(404).json({ error: "Not Found", message: "Record not found." });
+      }
+      throw err;
+    }
+    return res.json({
+      recordId,
+      rawPersistedContent: fileData.content,
+      sha: fileData.sha,
+      isEncrypted: true
+    });
+  } catch (err) {
+    const status = err.status || 500;
+    return res.status(status).json({ error: err.error || "Retrieval Failed", message: err.message });
+  }
+});
 app.put("/api/db/projects/:projectId/collections/:collection/records/:recordId", requireProjectAuth, async (req, res) => {
   try {
     const { projectId, collection, recordId } = req.params;
@@ -7492,7 +7520,7 @@ app.get(["/api/vault/tree", "/vault/tree", "/tree"], requireAuth, async (req, re
     console.log(`Response item/file count: ${rawTree.length}`);
     console.log("-------------------------------");
     const filteredTree = rawTree.filter((item) => {
-      return item.path.startsWith("data/users/") || item.path.startsWith("data/users_index/") || item.path === "data/users" || item.path === "data/users_index";
+      return item.path.startsWith("data/users/") || item.path.startsWith("data/users_index/") || item.path.startsWith("data/apps/") || item.path === "data/users" || item.path === "data/users_index" || item.path === "data/apps";
     }).map((item) => ({
       path: item.path,
       sha: item.sha,
