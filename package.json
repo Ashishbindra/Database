@@ -12,7 +12,8 @@
     "test:security": "tsx -e \"import('./src/sdk/testing/SecurityTestRunner.ts').then(m => m.SecurityTestRunner.runAllTests()).then(r => { const passed = r.filter(x => x.status === 'PASSED').length; console.log('Total Tests:', r.length, 'Passed:', passed); if (passed < r.length) process.exit(1); })\"",
     "test:serverless": "node scripts/test-serverless.mjs",
     "test:github": "node scripts/test-github-storage.mjs",
-    "test": "npm run test:serverless && npm run test:github && npm run test:security"
+    "test:database": "node scripts/test-database-api.mjs",
+    "test": "npm run test:serverless && npm run test:github && npm run test:database && npm run test:security"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
