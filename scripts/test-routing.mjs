@@ -102,17 +102,21 @@ async function runRoutingTests() {
     const cssFile = demoAssetFiles.find((f) => f.endsWith(".css"));
     const jsFile = demoAssetFiles.find((f) => f.endsWith(".js"));
 
-    if (cssFile) {
-      const cssRes = await fetch(`${baseUrl}/examples/database-demo/assets/${cssFile}`);
-      if (cssRes.status !== 200) throw new Error(`Failed to load demo CSS: Status ${cssRes.status}`);
-      console.log(`✓ GET /examples/database-demo/assets/${cssFile} -> HTTP 200 (CSS)`);
-    }
+    if (!cssFile) throw new Error("No compiled CSS file found in demo assets directory");
+    if (!jsFile) throw new Error("No compiled JS file found in demo assets directory");
 
-    if (jsFile) {
-      const jsRes = await fetch(`${baseUrl}/examples/database-demo/assets/${jsFile}`);
-      if (jsRes.status !== 200) throw new Error(`Failed to load demo JS: Status ${jsRes.status}`);
-      console.log(`✓ GET /examples/database-demo/assets/${jsFile} -> HTTP 200 (JS)`);
+    const cssRes = await fetch(`${baseUrl}/examples/database-demo/assets/${cssFile}`);
+    if (cssRes.status !== 200) throw new Error(`Failed to load demo CSS: Status ${cssRes.status}`);
+    const cssText = await cssRes.text();
+    if (!cssText.includes("tailwindcss") && !cssText.includes("flex")) {
+      throw new Error("Compiled CSS missing Tailwind utilities");
     }
+    console.log(`✓ GET /examples/database-demo/assets/${cssFile} -> HTTP 200 (CSS, ${cssText.length} bytes, verified compiled Tailwind rules)`);
+
+    const jsRes = await fetch(`${baseUrl}/examples/database-demo/assets/${jsFile}`);
+    if (jsRes.status !== 200) throw new Error(`Failed to load demo JS: Status ${jsRes.status}`);
+    const jsText = await jsRes.text();
+    console.log(`✓ GET /examples/database-demo/assets/${jsFile} -> HTTP 200 (JS, ${jsText.length} bytes)`);
 
     // Test Root SPA route fallback
     console.log("8. Testing Root SPA route fallback (/shramik, /resume)...");

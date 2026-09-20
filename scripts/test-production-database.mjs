@@ -575,8 +575,8 @@ async function runProductionDatabaseTest() {
     throw err;
   }
 
-  // 20. Verify Demo Route /examples/database-demo
-  console.log("\n20. Verifying external HTTP GET /examples/database-demo...");
+  // 20. Verify Demo Route /examples/database-demo & CSS Asset Serving
+  console.log("\n20. Verifying external HTTP GET /examples/database-demo & CSS asset...");
   try {
     const demoRes = await fetch(`${cleanBaseUrl}/examples/database-demo`, {
       method: "GET",
@@ -584,8 +584,22 @@ async function runProductionDatabaseTest() {
     assert.strictEqual(demoRes.status, 200, `Expected HTTP 200 from /examples/database-demo, got ${demoRes.status}`);
     const contentType = demoRes.headers.get("content-type") || "";
     assert.ok(contentType.includes("text/html"), `Expected text/html content-type, got ${contentType}`);
-    results.demoRoute = "PASS (HTTP 200 text/html)";
-    console.log(`✓ External HTTP GET /examples/database-demo returned HTTP 200 text/html`);
+    const htmlBody = await demoRes.text();
+
+    // Extract stylesheet href
+    const cssMatch = htmlBody.match(/href="([^"]+\.css)"/);
+    if (cssMatch) {
+      const cssPath = cssMatch[1].startsWith("http") ? cssMatch[1] : `${cleanBaseUrl}${cssMatch[1].startsWith("/") ? "" : "/"}${cssMatch[1]}`;
+      console.log(`   Fetching demo CSS asset from: ${cssPath}`);
+      const cssRes = await fetch(cssPath);
+      assert.strictEqual(cssRes.status, 200, `Expected HTTP 200 for demo CSS asset, got ${cssRes.status}`);
+      const cssText = await cssRes.text();
+      assert.ok(cssText.length > 500, `CSS file too short (${cssText.length} bytes)`);
+      console.log(`   ✓ Demo CSS asset returned HTTP 200 (${cssText.length} bytes)`);
+    }
+
+    results.demoRoute = "PASS (HTTP 200 text/html & CSS 200)";
+    console.log(`✓ External HTTP GET /examples/database-demo returned HTTP 200 and valid CSS`);
   } catch (err) {
     results.demoRoute = `FAIL (${err.message})`;
     console.error("✗ Demo route test failed:", err.message);

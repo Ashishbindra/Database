@@ -14,11 +14,11 @@
       "destination": "/examples/database-demo/index.html"
     },
     {
-      "source": "/examples/database-demo/(.*)",
+      "source": "/examples/database-demo/((?!assets(?:/|$)).*)",
       "destination": "/examples/database-demo/index.html"
     },
     {
-      "source": "/((?!api(?:/|$)|examples/database-demo(?:/|$)).*)",
+      "source": "/((?!api(?:/|$)|examples/database-demo(?:/|$)|assets(?:/|$)).*)",
       "destination": "/index.html"
     }
   ]
