@@ -16,6 +16,7 @@ import { PublicApiDocsView } from "./PublicApiDocsView";
 import { PublicDatabaseLanding } from "./PublicDatabaseLanding";
 import { ApiPlaygroundView } from "./ApiPlaygroundView";
 import { UsageStatsView } from "./UsageStatsView";
+import { DeveloperOnboardingFlow } from "./DeveloperOnboardingFlow";
 import { 
   Database, 
   Layers, 
@@ -42,6 +43,7 @@ interface DeveloperDatabaseDashboardProps {
 }
 
 type DashboardTab = 
+  | "onboarding"
   | "overview" 
   | "projects" 
   | "credentials" 
@@ -139,8 +141,8 @@ export function DeveloperDatabaseDashboard({ sdk }: DeveloperDatabaseDashboardPr
   };
 
   // Create Project
-  const handleCreateProject = async (projectId: string) => {
-    if (!dbClient) return;
+  const handleCreateProject = async (projectId: string): Promise<ProjectItem | null> => {
+    if (!dbClient) return null;
     setIsLoading(true);
     setGlobalError(null);
     try {
@@ -148,13 +150,14 @@ export function DeveloperDatabaseDashboard({ sdk }: DeveloperDatabaseDashboardPr
       setGlobalSuccess(`Project '${projectId}' created successfully.`);
       const updatedList = await dbClient.listProjects();
       setProjects(updatedList);
-      const found = updatedList.find(p => p.projectId === created.projectId) || {
+      const found: ProjectItem = updatedList.find(p => p.projectId === created.projectId) || {
         projectId: created.projectId,
         projectToken: created.projectToken,
         status: "active",
       };
       await handleSelectProject(found);
       setTimeout(() => setGlobalSuccess(null), 3000);
+      return found;
     } catch (err: any) {
       setGlobalError(err.message || "Failed to create project.");
       throw err;
@@ -256,8 +259,8 @@ export function DeveloperDatabaseDashboard({ sdk }: DeveloperDatabaseDashboardPr
   };
 
   // Create Collection
-  const handleCreateCollection = async (collection: string) => {
-    if (!dbClient || !activeProject) return;
+  const handleCreateCollection = async (collection: string): Promise<boolean> => {
+    if (!dbClient || !activeProject) return false;
     setIsLoading(true);
     try {
       await dbClient.createCollection(collection);
@@ -266,6 +269,7 @@ export function DeveloperDatabaseDashboard({ sdk }: DeveloperDatabaseDashboardPr
       setCollections(cols);
       setActiveCollection(collection);
       setTimeout(() => setGlobalSuccess(null), 3000);
+      return true;
     } catch (err: any) {
       setGlobalError(err.message || "Failed to create collection.");
       throw err;
@@ -407,6 +411,18 @@ export function DeveloperDatabaseDashboard({ sdk }: DeveloperDatabaseDashboardPr
         {/* Tab Switcher */}
         <div className="flex items-center gap-2 border-t border-stone-800/80 pt-4 overflow-x-auto pb-1 scrollbar-thin">
           <button
+            onClick={() => setActiveTab("onboarding")}
+            className={`px-3.5 py-2 rounded-xl text-xs font-medium font-mono flex items-center gap-1.5 transition flex-shrink-0 ${
+              activeTab === "onboarding"
+                ? "bg-amber-500 text-stone-950 shadow-sm font-semibold"
+                : "bg-stone-950/60 text-stone-400 hover:text-stone-200 border border-stone-800/80"
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+            <span>Onboarding (6 Steps)</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab("overview")}
             className={`px-3.5 py-2 rounded-xl text-xs font-medium font-mono flex items-center gap-1.5 transition flex-shrink-0 ${
               activeTab === "overview"
@@ -414,7 +430,7 @@ export function DeveloperDatabaseDashboard({ sdk }: DeveloperDatabaseDashboardPr
                 : "bg-stone-950/60 text-stone-400 hover:text-stone-200 border border-stone-800/80"
             }`}
           >
-            <Sparkles className="w-3.5 h-3.5" />
+            <LayoutGrid className="w-3.5 h-3.5" />
             <span>Overview</span>
           </button>
 
@@ -506,10 +522,27 @@ export function DeveloperDatabaseDashboard({ sdk }: DeveloperDatabaseDashboardPr
 
       {/* Main Tab Content */}
       <div className="transition-opacity duration-200">
+        {activeTab === "onboarding" && (
+          <DeveloperOnboardingFlow
+            dbClient={dbClient}
+            projects={projects}
+            activeProject={activeProject}
+            onSelectProject={handleSelectProject}
+            onCreateProject={handleCreateProject}
+            onCreateCollection={handleCreateCollection}
+            onNavigateToExplorer={() => setActiveTab("explorer")}
+            onNavigateToDocs={() => setActiveTab("docs")}
+            onNavigateToPlayground={() => setActiveTab("playground")}
+          />
+        )}
+
         {activeTab === "overview" && (
           <PublicDatabaseLanding
             onOpenDashboard={() => setActiveTab("projects")}
             onOpenDocs={() => setActiveTab("docs")}
+            onOpenPlayground={() => setActiveTab("playground")}
+            onOpenSdk={() => setActiveTab("docs")}
+            onOpenOnboarding={() => setActiveTab("onboarding")}
             onOpenDemo={() => {
               if (typeof window !== "undefined") {
                 window.open("/examples/database-demo", "_blank");

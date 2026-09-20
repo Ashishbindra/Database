@@ -21,7 +21,7 @@ interface ProjectsManagerViewProps {
   projects: ProjectItem[];
   activeProject: ProjectItem | null;
   onSelectProject: (project: ProjectItem) => void;
-  onCreateProject: (projectId: string) => Promise<void>;
+  onCreateProject: (projectId: string) => Promise<any>;
   onToggleStatus: (projectId: string, currentStatus: "active" | "disabled") => Promise<void>;
   onRotateToken: (projectId: string) => Promise<void>;
   onDeleteProject: (projectId: string) => Promise<void>;

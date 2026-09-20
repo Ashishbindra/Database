@@ -228,6 +228,63 @@ export function CredentialsManagerView({
         </div>
       </div>
 
+      {/* Quick Connection Snippets */}
+      {!isRevoked && (
+        <div className="bg-stone-900/80 border border-stone-800 rounded-2xl p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <FileCode className="w-4 h-4 text-amber-400" />
+              <h4 className="text-xs font-semibold text-stone-200 uppercase font-mono tracking-wider">
+                Connection Examples ({activeProject.projectId})
+              </h4>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* cURL Example */}
+            <div className="bg-stone-950 border border-stone-800/80 rounded-xl p-3.5 space-y-2">
+              <div className="flex items-center justify-between text-xs text-stone-400 font-mono">
+                <span>cURL (HTTP REST)</span>
+                <button
+                  onClick={() => handleCopy(`curl -X GET "${typeof window !== "undefined" ? window.location.origin : "https://github-encrypted-vault.vercel.app"}/api/db/projects/${activeProject.projectId}/collections" \\\n  -H "Authorization: Bearer ${token}"`)}
+                  className="hover:text-amber-300 transition text-[11px] flex items-center gap-1"
+                >
+                  <Copy className="w-3 h-3" /> Copy
+                </button>
+              </div>
+              <pre className="text-[11px] font-mono text-stone-300 overflow-x-auto whitespace-pre">
+{`curl -X GET "${typeof window !== "undefined" ? window.location.origin : "https://github-encrypted-vault.vercel.app"}/api/db/projects/${activeProject.projectId}/collections" \\
+  -H "Authorization: Bearer ${token}"`}
+              </pre>
+            </div>
+
+            {/* TypeScript SDK Example */}
+            <div className="bg-stone-950 border border-stone-800/80 rounded-xl p-3.5 space-y-2">
+              <div className="flex items-center justify-between text-xs text-stone-400 font-mono">
+                <span>TypeScript / JavaScript SDK</span>
+                <button
+                  onClick={() => handleCopy(`import { EncryptedDatabaseClient } from "github-encrypted-storage-sdk";\n\nconst db = new EncryptedDatabaseClient({\n  baseUrl: "${typeof window !== "undefined" ? window.location.origin : "https://github-encrypted-vault.vercel.app"}",\n  projectId: "${activeProject.projectId}",\n  projectToken: "${token}",\n});\n\nconst records = await db.listRecords("users");`)}
+                  className="hover:text-amber-300 transition text-[11px] flex items-center gap-1"
+                >
+                  <Copy className="w-3 h-3" /> Copy
+                </button>
+              </div>
+              <pre className="text-[11px] font-mono text-stone-300 overflow-x-auto whitespace-pre">
+{`import { EncryptedDatabaseClient } from "github-encrypted-storage-sdk";
+
+const db = new EncryptedDatabaseClient({
+  baseUrl: "${typeof window !== "undefined" ? window.location.origin : "https://github-encrypted-vault.vercel.app"}",
+  projectId: "${activeProject.projectId}",
+  projectToken: "${token}",
+});
+
+const records = await db.listRecords("users");`}
+              </pre>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Security Principles Notice */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="bg-stone-900/60 border border-stone-800 rounded-2xl p-5 space-y-3">

@@ -19,24 +19,31 @@ import {
   RefreshCw,
   Copy,
   Check,
-  AlertTriangle
+  AlertTriangle,
+  BookOpen
 } from "lucide-react";
 
 interface PublicDatabaseLandingProps {
   onOpenDashboard: () => void;
   onOpenDocs: () => void;
   onOpenDemo: () => void;
+  onOpenPlayground?: () => void;
+  onOpenSdk?: () => void;
+  onOpenOnboarding?: () => void;
 }
 
 export function PublicDatabaseLanding({
   onOpenDashboard,
   onOpenDocs,
   onOpenDemo,
+  onOpenPlayground,
+  onOpenSdk,
+  onOpenOnboarding,
 }: PublicDatabaseLandingProps) {
   const [activeCodeTab, setActiveCodeTab] = useState<"ts" | "curl" | "fetch">("ts");
   const [copiedCode, setCopiedCode] = useState(false);
 
-  const baseUrl = typeof window !== "undefined" ? window.location.origin : "https://your-domain.com";
+  const baseUrl = typeof window !== "undefined" ? window.location.origin : "https://github-encrypted-vault.vercel.app";
 
   const handleCopy = (code: string) => {
     navigator.clipboard.writeText(code);
@@ -45,7 +52,7 @@ export function PublicDatabaseLanding({
   };
 
   const sampleSnippet = {
-    ts: `import { EncryptedDatabaseClient } from "@encrypted-vault/database";
+    ts: `import { EncryptedDatabaseClient } from "github-encrypted-storage-sdk";
 
 const db = new EncryptedDatabaseClient({
   baseUrl: "${baseUrl}",
@@ -98,27 +105,27 @@ const { recordId, sha } = await res.json();`
         <div className="relative z-10 max-w-3xl space-y-6">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-mono">
             <ShieldCheck className="w-3.5 h-3.5" />
-            <span>Zero-Cost Serverless Encrypted Database</span>
+            <span>Encrypted Database API backed by GitHub</span>
           </div>
 
           <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold text-stone-100 tracking-tight leading-tight">
             Encrypted Database API <br className="hidden sm:inline" />
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-400 via-amber-200 to-stone-300">
-              Powered by GitHub Git Storage
+              backed by GitHub
             </span>
           </h1>
 
           <p className="text-base sm:text-lg text-stone-400 leading-relaxed max-w-2xl">
-            A production-ready, AES-256-GCM encrypted multi-tenant database backend. Store structured documents directly in your private GitHub repository with zero cloud database fees, full optimistic concurrency, and strict project namespace isolation.
+            A secure, multi-tenant JSON database engine providing REST APIs, AES-256-GCM encrypted document persistence, SHA-based optimistic concurrency, project boundary isolation, and a lightweight HTTP SDK.
           </p>
 
           <div className="flex flex-wrap items-center gap-3 pt-2">
             <button
-              onClick={onOpenDashboard}
+              onClick={onOpenOnboarding || onOpenDashboard}
               className="px-6 py-3 bg-amber-500 hover:bg-amber-400 text-stone-950 font-semibold text-sm rounded-xl transition shadow-lg shadow-amber-500/10 flex items-center gap-2"
             >
-              <Database className="w-4 h-4" />
-              <span>Open Developer Console</span>
+              <Sparkles className="w-4 h-4" />
+              <span>Get Started</span>
               <ArrowRight className="w-4 h-4" />
             </button>
 
@@ -126,17 +133,37 @@ const { recordId, sha } = await res.json();`
               onClick={onOpenDocs}
               className="px-5 py-3 bg-stone-800/80 hover:bg-stone-700 text-stone-200 text-sm font-medium rounded-xl border border-stone-700/60 transition flex items-center gap-2"
             >
-              <Code className="w-4 h-4 text-amber-400" />
-              <span>Read API Reference</span>
+              <BookOpen className="w-4 h-4 text-amber-400" />
+              <span>Documentation</span>
             </button>
+
+            {onOpenPlayground && (
+              <button
+                onClick={onOpenPlayground}
+                className="px-5 py-3 bg-stone-800/80 hover:bg-stone-700 text-stone-200 text-sm font-medium rounded-xl border border-stone-700/60 transition flex items-center gap-2"
+              >
+                <Terminal className="w-4 h-4 text-amber-400" />
+                <span>API Playground</span>
+              </button>
+            )}
 
             <button
               onClick={onOpenDemo}
-              className="px-5 py-3 bg-stone-900 hover:bg-stone-800 text-stone-400 hover:text-stone-200 text-sm font-medium rounded-xl border border-stone-800 transition flex items-center gap-2"
+              className="px-5 py-3 bg-stone-900 hover:bg-stone-800 text-stone-300 text-sm font-medium rounded-xl border border-stone-800 transition flex items-center gap-2"
             >
-              <Sparkles className="w-4 h-4 text-amber-400" />
-              <span>Try Demo App</span>
+              <ExternalLink className="w-4 h-4 text-amber-400" />
+              <span>Demo App</span>
             </button>
+
+            {onOpenSdk && (
+              <button
+                onClick={onOpenSdk}
+                className="px-5 py-3 bg-stone-900 hover:bg-stone-800 text-stone-300 text-sm font-medium rounded-xl border border-stone-800 transition flex items-center gap-2 font-mono"
+              >
+                <Code className="w-4 h-4 text-amber-400" />
+                <span>SDK</span>
+              </button>
+            )}
           </div>
         </div>
       </div>

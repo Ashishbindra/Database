@@ -2,10 +2,35 @@
   "name": "github-encrypted-storage-sdk",
   "private": true,
   "version": "1.0.0",
+  "description": "Lightweight, HTTP-only client SDK and encrypted multi-project database engine backed by GitHub",
+  "main": "./dist/sdk/index.cjs",
+  "module": "./dist/sdk/index.js",
+  "types": "./dist/sdk/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js",
+      "require": "./dist/sdk/index.cjs"
+    }
+  },
+  "files": [
+    "dist/sdk"
+  ],
+  "keywords": [
+    "encrypted-storage",
+    "database",
+    "github-storage",
+    "sdk",
+    "rest-api",
+    "aes-256-gcm",
+    "optimistic-concurrency"
+  ],
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && vite build examples/database-demo --config examples/database-demo/vite.config.ts && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && esbuild src/server/vercel-handler.ts --bundle --platform=node --format=esm --packages=external --sourcemap --outfile=api/index.js",
+    "build:sdk": "tsc -p tsconfig.sdk.json && esbuild src/sdk/database/index.ts --bundle --platform=neutral --format=esm --sourcemap --outfile=dist/sdk/index.js && esbuild src/sdk/database/index.ts --bundle --platform=neutral --format=cjs --sourcemap --outfile=dist/sdk/index.cjs",
+    "build": "vite build && npm run build:sdk && vite build examples/database-demo --config examples/database-demo/vite.config.ts && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && esbuild src/server/vercel-handler.ts --bundle --platform=node --format=esm --packages=external --sourcemap --outfile=api/index.js",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.cjs api/index.js api/index.js.map api/\\[...path\\].js*",
     "lint": "tsc --noEmit",
@@ -20,9 +45,10 @@
     "test:phase2": "node scripts/test-phase2-public-api.mjs",
     "test:phase3": "node scripts/test-phase3-developer-experience.mjs",
     "test:phase4": "node scripts/test-phase4-production-audit.mjs",
+    "test:phase5": "node scripts/test-phase5.mjs",
     "test:demo": "tsx scripts/test-demo-app.mjs",
     "test:routing": "node scripts/test-routing.mjs",
-    "test": "npm run test:serverless && npm run test:github && npm run test:database && npm run test:external && npm run test:sdk && npm run test:phase1 && npm run test:phase2 && npm run test:phase3 && npm run test:phase4 && npm run test:security && npm run test:routing"
+    "test": "npm run test:serverless && npm run test:github && npm run test:database && npm run test:external && npm run test:sdk && npm run test:phase1 && npm run test:phase2 && npm run test:phase3 && npm run test:phase4 && npm run test:phase5 && npm run test:security && npm run test:routing"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

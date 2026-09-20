@@ -18,7 +18,7 @@ interface CollectionsManagerViewProps {
   collections: string[];
   collectionCounts: Record<string, number>;
   onSelectCollection: (col: string) => void;
-  onCreateCollection: (col: string) => Promise<void>;
+  onCreateCollection: (col: string) => Promise<any>;
   onDeleteCollection: (col: string) => Promise<void>;
   onNavigateToExplorer: () => void;
   isLoading: boolean;
