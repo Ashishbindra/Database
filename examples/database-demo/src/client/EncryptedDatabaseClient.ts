@@ -83,7 +83,17 @@ export class EncryptedDatabaseClient {
     this.projectId = config.projectId;
     this.projectToken = config.projectToken;
     this.userSessionToken = config.userSessionToken;
-    this.fetchFn = config.fetchFn || (typeof fetch !== "undefined" ? fetch.bind(globalThis) : (globalThis as any).fetch);
+    if (config.fetchFn) {
+      this.fetchFn = config.fetchFn;
+    } else if (typeof window !== "undefined" && typeof window.fetch === "function") {
+      this.fetchFn = window.fetch.bind(window);
+    } else if (typeof globalThis !== "undefined" && typeof globalThis.fetch === "function") {
+      this.fetchFn = globalThis.fetch.bind(globalThis);
+    } else if (typeof fetch === "function") {
+      this.fetchFn = fetch;
+    } else {
+      this.fetchFn = ((globalThis as any)?.fetch?.bind(globalThis)) || fetch;
+    }
   }
 
   public setProject(projectId: string, projectToken: string) {
@@ -345,7 +355,15 @@ export class EncryptedDatabaseClient {
 
     let response: Response;
     try {
-      response = await this.fetchFn(url, {
+      const fetchImpl = this.fetchFn || (
+        typeof window !== "undefined" && typeof window.fetch === "function"
+          ? window.fetch.bind(window)
+          : (typeof globalThis !== "undefined" && typeof globalThis.fetch === "function"
+              ? globalThis.fetch.bind(globalThis)
+              : fetch)
+      );
+      const targetContext = typeof window !== "undefined" ? window : (typeof globalThis !== "undefined" ? globalThis : undefined);
+      response = await fetchImpl.call(targetContext, url, {
         method: opts.method,
         headers,
         body: bodyStr,

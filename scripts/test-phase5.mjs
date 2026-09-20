@@ -194,6 +194,53 @@ async function runPhase5Tests() {
   });
   assert(crossProjRes.status === 403 || crossProjRes.status === 401, "Cross-project request rejected with 403/401");
 
+  // 5.9 REGRESSION TEST: SDK Window.fetch context & Developer Onboarding 'my-test-app' creation
+  console.log("\n🧪 6. Regression: Developer Onboarding 'Create Project' with Window.fetch binding");
+  
+  // Import compiled SDK
+  const { EncryptedDatabaseClient } = await import("../dist/sdk/index.js");
+  
+  // Create mock window object with strict this-binding check
+  const mockWindow = {
+    name: "MockWindow",
+    fetch: function(url, opts) {
+      if (this !== mockWindow && this !== globalThis && typeof this !== "undefined") {
+        throw new TypeError("'fetch' called on an object that does not implement interface Window.");
+      }
+      return fetch(url, opts);
+    }
+  };
+
+  // Test client with window-bound fetch implementation
+  const onboardingClient = new EncryptedDatabaseClient({
+    baseUrl: BASE_URL,
+    userSessionToken: sessionToken,
+    fetchFn: mockWindow.fetch.bind(mockWindow)
+  });
+
+  const testAppProject = await onboardingClient.createProject("my-test-app");
+  assert(testAppProject.projectId === "my-test-app", "Onboarding created project 'my-test-app' via SDK");
+  assert(Boolean(testAppProject.projectToken), "Onboarding received valid projectToken for 'my-test-app'");
+
+  // Verify created project in list
+  const userProjects = await onboardingClient.listProjects();
+  assert(userProjects.some(p => p.projectId === "my-test-app"), "'my-test-app' listed in user projects");
+
+  // Verify collections and record creation in 'my-test-app'
+  onboardingClient.setProject("my-test-app", testAppProject.projectToken);
+  const colRes = await onboardingClient.createCollection("users");
+  assert(colRes.success === true, "Collection 'users' created in 'my-test-app'");
+
+  const recRes = await onboardingClient.createRecord("users", {
+    appName: "my-test-app",
+    status: "verified",
+    timestamp: new Date().toISOString()
+  }, "rec_test_init");
+  assert(recRes.recordId === "rec_test_init", "Record 'rec_test_init' inserted into 'my-test-app'");
+
+  const readRec = await onboardingClient.getRecord("users", "rec_test_init");
+  assert(readRec.data.appName === "my-test-app", "Record verified in 'my-test-app'");
+
   console.log("\n==================================================");
   console.log(`🎉 ALL ${passedTests}/${totalTests} PHASE 5 TESTS PASSED SUCCESSFULLY!`);
   console.log("==================================================");
