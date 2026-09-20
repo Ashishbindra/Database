@@ -60,44 +60,97 @@ Production-quality, zero-cost, end-to-end encrypted data storage SDK designed fo
 
 ---
 
-## 🚀 Quick Start & Integration
+## 🚀 5-Minute Developer Quickstart (Encrypted Database Client SDK)
+
+Install the client package:
+
+```bash
+npm install github-encrypted-storage-sdk
+```
+
+Connect and perform encrypted operations in under 5 minutes:
 
 ```typescript
-import { CentralDataClient } from "./sdk/CentralDataClient";
+import { EncryptedDatabaseClient } from "github-encrypted-storage-sdk";
 
-// Initialize SDK
-const sdk = new CentralDataClient();
-await sdk.init();
-
-// Register User Account
-const { profile, recoveryWords } = await sdk.authManager.register("john_doe", "SecretPassword123!");
-console.log("Save your 24-word recovery phrase safely:", recoveryWords.join(" "));
-
-// Save Record in Shramik Hisab
-await sdk.saveAppRecord("shramik_hisab", "workers", {
-  id: "w1",
-  name: "Ramesh Kumar",
-  dailyWage: 850,
+// 1. Initialize client using public credentials
+const db = new EncryptedDatabaseClient({
+  baseUrl: process.env.DATABASE_URL || "https://github-encrypted-vault.vercel.app",
+  projectId: process.env.DATABASE_PROJECT_ID || "my-app",
+  projectToken: process.env.DATABASE_PROJECT_TOKEN || "pt_live_...",
 });
 
-// Sync to Cloud Storage
-await sdk.syncApp("shramik_hisab");
+// 2. Health check
+const health = await db.checkHealth();
+console.log("Database status:", health.status);
+
+// 3. Ensure collection exists
+await db.createCollection("users");
+
+// 4. Insert encrypted record (Transparent AES-256-GCM)
+const newRecord = await db.createRecord("users", {
+  name: "Alex Doe",
+  email: "alex@example.com",
+  role: "developer"
+}, "user_001");
+console.log("Created Record ID:", newRecord.recordId, "Git Blob SHA:", newRecord.sha);
+
+// 5. Read decrypted record
+const record = await db.getRecord("users", "user_001");
+console.log("Decrypted payload:", record.data);
+
+// 6. Update with optimistic concurrency
+const updated = await db.updateRecord(
+  "users",
+  "user_001",
+  { ...record.data, role: "lead-architect" },
+  record.sha // Prevents race conditions
+);
+
+// 7. Inspect remote raw ciphertext envelope
+const rawEnvelope = await db.getRawEnvelope("users", "user_001");
+console.log("Remote Ciphertext Envelope:", rawEnvelope.rawPersistedContent);
 ```
 
 ---
 
-## 🧪 Security Test Suite
+## 🔒 Configuration & Environment Separation Audit
 
-The SDK includes 25 automated browser security test assertions (`SEC-01` through `SEC-25`):
-* `SEC-01`: User A cannot decrypt User B data
-* `SEC-02`: Wrong password fails auth proof & key unwrapping
-* `SEC-03`: AEAD ciphertext tamper detection
-* `SEC-04`: Multi-app isolation enforcement
-* `SEC-05`: 24-Word standard BIP-39 recovery phrase checksum
-* `SEC-06`: App uninstall / reinstall cloud state restoration
-* `SEC-07`: Zero plaintext private data on remote storage
-* `SEC-08`: Nonce uniqueness across 100 encryption operations
-* `SEC-11`: Zero Client PAT exposure
-* `SEC-14`: IndexedDB working database purge on logout
+| Variable | Scope | Description | Allowed in Client Bundle? |
+| :--- | :--- | :--- | :--- |
+| `DATABASE_URL` | Public / Client | Base API URL (e.g. `https://...`) | ✅ **YES** |
+| `DATABASE_PROJECT_ID` | Public / Client | Project namespace ID | ✅ **YES** |
+| `DATABASE_PROJECT_TOKEN`| Public / Client | Scoped HMAC Project API Token | ✅ **YES** (App scope) |
+| `GITHUB_STORAGE_PAT` | **Server-Only** | GitHub Personal Access Token | ❌ **STRICTLY FORBIDDEN** |
+| `SESSION_SECRET` | **Server-Only** | HMAC Signing Secret & Master Key | ❌ **STRICTLY FORBIDDEN** |
+| `GITHUB_OWNER` | Server-Only | Target GitHub Org / Username | ❌ Server Config |
+| `GITHUB_REPO` | Server-Only | Target GitHub Repository | ❌ Server Config |
+| `GITHUB_BRANCH` | Server-Only | Target Git Branch | ❌ Server Config |
 
-Run all assertions directly via the UI **Security Tests** tab or call `SecurityTestRunner.runAllTests()`.
+---
+
+## 🧪 Comprehensive Verification & Test Suites
+
+The repository contains automated test suites covering all architectural layers:
+
+```bash
+# Full release verification
+npm test
+
+# Phase-by-phase test suites
+npm run test:phase1      # Phase 1: Dashboard API & Onboarding
+npm run test:phase2      # Phase 2: Public Database REST API
+npm run test:phase3      # Phase 3: Developer Experience & Interactive Tools
+npm run test:phase4      # Phase 4: Production Audit & Resiliency
+npm run test:phase5      # Phase 5: SDK Packaging & Distribution
+npm run test:phase6      # Phase 6: External App Integration & Release Readiness
+
+# Integration & Security suites
+npm run test:external    # External client integration suite
+npm run test:sdk         # Encrypted Database SDK integration
+npm run test:database    # Database REST API integration
+npm run test:security    # 109 automated WebCrypto security tests
+npm run test:routing     # Routing & static asset serving
+npm run test:serverless  # Serverless vercel handler tests
+npm run test:github      # GitHub storage engine integration
+```

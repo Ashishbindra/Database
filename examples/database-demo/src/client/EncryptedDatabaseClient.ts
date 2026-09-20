@@ -66,6 +66,10 @@ export class DatabaseApiError extends Error {
     this.error = error;
     this.details = details;
   }
+
+  public get statusCode(): number {
+    return this.status;
+  }
 }
 
 export class EncryptedDatabaseClient {

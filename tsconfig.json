@@ -19,6 +19,9 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "github-encrypted-storage-sdk": [
+        "./src/sdk/database/index.ts"
       ]
     },
     "allowImportingTsExtensions": true,

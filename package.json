@@ -46,9 +46,13 @@
     "test:phase3": "node scripts/test-phase3-developer-experience.mjs",
     "test:phase4": "node scripts/test-phase4-production-audit.mjs",
     "test:phase5": "node scripts/test-phase5.mjs",
+    "test:phase6": "node scripts/test-phase6.mjs",
+    "test:phase7": "node scripts/test-phase7.mjs",
+    "test:external-app": "node examples/external-sdk-test/scripts/run-test.mjs",
+    "test:real-app": "node examples/real-external-app/scripts/run-app.mjs",
     "test:demo": "tsx scripts/test-demo-app.mjs",
     "test:routing": "node scripts/test-routing.mjs",
-    "test": "npm run test:serverless && npm run test:github && npm run test:database && npm run test:external && npm run test:sdk && npm run test:phase1 && npm run test:phase2 && npm run test:phase3 && npm run test:phase4 && npm run test:phase5 && npm run test:security && npm run test:routing"
+    "test": "npm run test:serverless && npm run test:github && npm run test:database && npm run test:external && npm run test:sdk && npm run test:phase1 && npm run test:phase2 && npm run test:phase3 && npm run test:phase4 && npm run test:phase5 && npm run test:phase6 && npm run test:phase7 && npm run test:security && npm run test:routing"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

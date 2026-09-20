@@ -1,0 +1,20 @@
+{
+  "name": "external-sdk-test",
+  "version": "1.0.0",
+  "description": "Minimal standalone example demonstrating external app integration using github-encrypted-storage-sdk",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "test": "node scripts/run-test.mjs",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "github-encrypted-storage-sdk": "file:../../"
+  },
+  "devDependencies": {
+    "typescript": "~5.7.2",
+    "tsx": "^4.19.2",
+    "@types/node": "^22.10.1"
+  }
+}
