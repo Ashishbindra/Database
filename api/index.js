@@ -7170,6 +7170,60 @@ var syncHandler = async (req, res) => {
 };
 app.put("/api/vault/state", requireAuth, syncHandler);
 app.post("/api/vault/sync", requireAuth, syncHandler);
+app.post("/api/vault/worker/register", async (req, res) => {
+  try {
+    const {
+      workerId,
+      ownerOpaqueUserId,
+      workerPasswordHash,
+      workerSaltHex,
+      isWorkerLoginEnabled = true,
+      isPasswordChangeRequired = true,
+      appId = "shramik_hisab"
+    } = req.body;
+
+    if (!workerId || !ownerOpaqueUserId || !workerPasswordHash || !workerSaltHex) {
+      return res.status(400).json({
+        error: "Invalid Request",
+        message: "workerId, ownerOpaqueUserId, workerPasswordHash, and workerSaltHex are required."
+      });
+    }
+
+    const cleanWorkerId = String(workerId).trim();
+    const workerIdHex = Buffer.from(cleanWorkerId).toString("hex");
+    const indexFilePath = `data/workers_index/${workerIdHex}.json`;
+
+    const indexRecord = {
+      workerId: cleanWorkerId,
+      ownerOpaqueUserId: String(ownerOpaqueUserId).trim(),
+      workerPasswordHash: String(workerPasswordHash).trim(),
+      workerSaltHex: String(workerSaltHex).trim(),
+      isWorkerLoginEnabled: Boolean(isWorkerLoginEnabled),
+      isPasswordChangeRequired: Boolean(isPasswordChangeRequired),
+      appId: appId || "shramik_hisab",
+      updatedAt: (new Date()).toISOString()
+    };
+
+    await githubStoragePut(
+      indexFilePath,
+      JSON.stringify(indexRecord, null, 2),
+      `Register worker ${cleanWorkerId} in global Vault index`
+    );
+
+    return res.status(200).json({
+      success: true,
+      workerId: cleanWorkerId,
+      isWorkerLoginEnabled: indexRecord.isWorkerLoginEnabled,
+      message: "Worker registered in global Vault index successfully."
+    });
+  } catch (err) {
+    console.error("[WORKER_REGISTER_ERROR]", err);
+    return res.status(500).json({
+      error: "Worker Registration Failed",
+      message: err.message || "Failed to register worker in global Vault index."
+    });
+  }
+});
 app.post("/api/vault/worker/auth-params", async (req, res) => {
   try {
     const { workerId } = req.body;
