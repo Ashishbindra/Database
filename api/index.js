@@ -3651,7 +3651,7 @@ var init_GitHubStorageClient = __esm({
         }
       }
       // Put / Sync application vault state to Server Vault Proxy
-      async syncState(appId, stateObject) {
+      async syncState(appId, stateObject, workerAuthEntries) {
         if (this.config.mode === "MOCK") {
           const entry = await GitHubMockRemote.putFile(
             `vault/${appId}/state.json`,
@@ -3672,7 +3672,8 @@ var init_GitHubStorageClient = __esm({
           },
           body: JSON.stringify({
             appId,
-            stateObject
+            stateObject,
+            workerAuthEntries
           })
         });
         if (res.status === 409) {
@@ -3685,6 +3686,31 @@ var init_GitHubStorageClient = __esm({
         }
         const data = await res.json();
         return { sha: data.sha, syncedAt: data.syncedAt };
+      }
+      async getWorkerAuthParams(workerId) {
+        try {
+          const res = await fetch(getApiUrl2(`/api/vault/worker/auth-params`), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workerId })
+          });
+          if (!res.ok) return { exists: false, isWorkerLoginEnabled: false };
+          return await res.json();
+        } catch {
+          return { exists: false, isWorkerLoginEnabled: false };
+        }
+      }
+      async workerLogin(workerId, passwordHash) {
+        const res = await fetch(getApiUrl2(`/api/vault/worker/login`), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ workerId, passwordHash })
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.message || "Worker login failed.");
+        }
+        return await res.json();
       }
       // Legacy getFile fallback compatibility
       async getFile(path4) {
@@ -4122,11 +4148,29 @@ var init_SyncManager = __esm({
           Date.now()
           // Data version
         );
-        await this.githubClient.putFile(
-          remotePath,
-          JSON.stringify(encryptedEnvelope, null, 2),
-          `Sync app state for ${appId} (User ${userId})`
-        );
+        let workerAuthEntries = void 0;
+        if (appId === "shramik_hisab") {
+          workerAuthEntries = [];
+          for (const rec of mergedMap.values()) {
+            if (rec.entity === "workers" && !rec.isDeleted && rec.data) {
+              const w = rec.data;
+              if (w.isWorkerLoginEnabled && w.workerPasswordHash && w.workerSaltHex) {
+                workerAuthEntries.push({
+                  workerId: w.id || w.workerId,
+                  isWorkerLoginEnabled: true,
+                  workerPasswordHash: w.workerPasswordHash,
+                  workerSaltHex: w.workerSaltHex
+                });
+              } else if (w.id) {
+                workerAuthEntries.push({
+                  workerId: w.id,
+                  isWorkerLoginEnabled: false
+                });
+              }
+            }
+          }
+        }
+        await this.githubClient.syncState(appId, encryptedEnvelope, workerAuthEntries);
         return { pushedCount, pulledCount, conflictsResolved };
       }
       // Restore Remote Cloud State (Uninstall / Reinstall Recovery & New Device Sync)
@@ -4551,6 +4595,19 @@ var init_CentralDataClient = __esm({
       async deleteAccountData() {
         if (!this.authManager.isLoggedIn()) return;
         await this.authManager.deleteAccount();
+      }
+      // --- WORKER AUTHENTICATION ---
+      async getWorkerAuthParams(workerId) {
+        return await this.githubClient.getWorkerAuthParams(workerId);
+      }
+      async workerLogin(workerId, password) {
+        const authParams = await this.getWorkerAuthParams(workerId);
+        if (!authParams.exists || !authParams.isWorkerLoginEnabled || !authParams.workerSaltHex) {
+          throw new Error("Worker login is not enabled for this ID.");
+        }
+        const saltHex = authParams.workerSaltHex;
+        const passwordHash = await CryptoManager.deriveAuthProofHash(password, saltHex);
+        return await this.githubClient.workerLogin(workerId, passwordHash);
       }
     };
   }
@@ -7032,6 +7089,41 @@ var syncHandler = async (req, res) => {
         message: updateRes.reason || "Freshness ledger update failed."
       });
     }
+    if (appId === "shramik_hisab" && Array.isArray(req.body.workerAuthEntries)) {
+      const workerAuthEntries = req.body.workerAuthEntries;
+      for (const entry of workerAuthEntries) {
+        if (entry && entry.workerId && entry.isWorkerLoginEnabled && entry.workerPasswordHash && entry.workerSaltHex) {
+          const workerIdHex = Buffer.from(entry.workerId).toString("hex");
+          const indexFilePath = `data/workers_index/${workerIdHex}.json`;
+          const indexRecord = {
+            workerId: entry.workerId,
+            ownerOpaqueUserId: session.opaqueUserId,
+            workerPasswordHash: entry.workerPasswordHash,
+            workerSaltHex: entry.workerSaltHex,
+            isWorkerLoginEnabled: true,
+            updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+          };
+          try {
+            await githubStoragePut(indexFilePath, JSON.stringify(indexRecord, null, 2), `Update worker index for ${entry.workerId}`);
+          } catch (e) {
+            console.error("Failed to update worker index:", e);
+          }
+        } else if (entry && entry.workerId) {
+          const workerIdHex = Buffer.from(entry.workerId).toString("hex");
+          const indexFilePath = `data/workers_index/${workerIdHex}.json`;
+          try {
+            const { content, sha: sha2 } = await githubStorageGet(indexFilePath);
+            if (content) {
+              const parsed = JSON.parse(content);
+              if (parsed.ownerOpaqueUserId === session.opaqueUserId && sha2) {
+                await githubStorageDeleteFile(indexFilePath, sha2, `Remove worker index for ${entry.workerId}`);
+              }
+            }
+          } catch {
+          }
+        }
+      }
+    }
     return res.json({
       success: true,
       sha,
@@ -7048,6 +7140,69 @@ var syncHandler = async (req, res) => {
 };
 app.put("/api/vault/state", requireAuth, syncHandler);
 app.post("/api/vault/sync", requireAuth, syncHandler);
+app.post("/api/vault/worker/auth-params", async (req, res) => {
+  try {
+    const { workerId } = req.body;
+    if (!workerId) {
+      return res.status(400).json({ error: "Invalid Request", message: "workerId is required." });
+    }
+    const workerIdHex = Buffer.from(workerId).toString("hex");
+    const indexFilePath = `data/workers_index/${workerIdHex}.json`;
+    try {
+      const { content } = await githubStorageGet(indexFilePath);
+      if (content) {
+        const record = JSON.parse(content);
+        if (record.isWorkerLoginEnabled) {
+          return res.json({
+            exists: true,
+            isWorkerLoginEnabled: true,
+            workerSaltHex: record.workerSaltHex
+          });
+        }
+      }
+    } catch {
+    }
+    return res.json({ exists: false, isWorkerLoginEnabled: false });
+  } catch (err) {
+    return res.status(500).json({ error: "Server Error", message: err.message });
+  }
+});
+app.post("/api/vault/worker/login", async (req, res) => {
+  try {
+    const { workerId, passwordHash, passwordProof } = req.body;
+    if (!workerId || !passwordHash && !passwordProof) {
+      return res.status(400).json({ error: "Invalid Request", message: "workerId and passwordHash/passwordProof are required." });
+    }
+    const workerIdHex = Buffer.from(workerId).toString("hex");
+    const indexFilePath = `data/workers_index/${workerIdHex}.json`;
+    let record = null;
+    try {
+      const { content } = await githubStorageGet(indexFilePath);
+      if (content) {
+        record = JSON.parse(content);
+      }
+    } catch {
+      return res.status(401).json({ error: "Authentication Failed", message: "Invalid worker credentials." });
+    }
+    if (!record || !record.isWorkerLoginEnabled || !record.workerPasswordHash) {
+      return res.status(401).json({ error: "Authentication Failed", message: "Worker not found or login disabled." });
+    }
+    const submittedProof = passwordHash || passwordProof;
+    const expectedBuf = Buffer.from(record.workerPasswordHash, "hex");
+    const submittedBuf = Buffer.from(submittedProof, "hex");
+    if (expectedBuf.length !== submittedBuf.length || !crypto2.timingSafeEqual(expectedBuf, submittedBuf)) {
+      return res.status(401).json({ error: "Authentication Failed", message: "Invalid password." });
+    }
+    return res.json({
+      success: true,
+      authenticatedWorkerId: record.workerId,
+      opaqueUserId: record.ownerOpaqueUserId,
+      appId: "shramik_hisab"
+    });
+  } catch (err) {
+    return res.status(401).json({ error: "Authentication Failed", message: err.message || "Worker login failed." });
+  }
+});
 function dbStringToBase64Url(str) {
   return Buffer.from(str).toString("base64url");
 }
@@ -8127,7 +8282,8 @@ var VAULT_SUBROUTES2 = /* @__PURE__ */ new Set([
   "lock",
   "store",
   "retrieve",
-  "delete"
+  "delete",
+  "worker"
 ]);
 function normalizeVaultUrl2(rawUrl, headers) {
   let target = rawUrl || "/";

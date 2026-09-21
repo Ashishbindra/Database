@@ -1246,6 +1246,42 @@ const syncHandler = async (req: Request, res: Response) => {
       });
     }
 
+    // 5b. If appId is shramik_hisab and workerAuthEntries provided, update global worker authentication index
+    if (appId === "shramik_hisab" && Array.isArray(req.body.workerAuthEntries)) {
+      const workerAuthEntries = req.body.workerAuthEntries;
+      for (const entry of workerAuthEntries) {
+        if (entry && entry.workerId && entry.isWorkerLoginEnabled && entry.workerPasswordHash && entry.workerSaltHex) {
+          const workerIdHex = Buffer.from(entry.workerId).toString('hex');
+          const indexFilePath = `data/workers_index/${workerIdHex}.json`;
+          const indexRecord = {
+            workerId: entry.workerId,
+            ownerOpaqueUserId: session.opaqueUserId,
+            workerPasswordHash: entry.workerPasswordHash,
+            workerSaltHex: entry.workerSaltHex,
+            isWorkerLoginEnabled: true,
+            updatedAt: new Date().toISOString(),
+          };
+          try {
+            await githubStoragePut(indexFilePath, JSON.stringify(indexRecord, null, 2), `Update worker index for ${entry.workerId}`);
+          } catch (e) {
+            console.error("Failed to update worker index:", e);
+          }
+        } else if (entry && entry.workerId) {
+          const workerIdHex = Buffer.from(entry.workerId).toString('hex');
+          const indexFilePath = `data/workers_index/${workerIdHex}.json`;
+          try {
+            const { content, sha } = await githubStorageGet(indexFilePath);
+            if (content) {
+              const parsed = JSON.parse(content);
+              if (parsed.ownerOpaqueUserId === session.opaqueUserId && sha) {
+                await githubStorageDeleteFile(indexFilePath, sha, `Remove worker index for ${entry.workerId}`);
+              }
+            }
+          } catch {}
+        }
+      }
+    }
+
     return res.json({
       success: true,
       sha,
@@ -1263,6 +1299,77 @@ const syncHandler = async (req: Request, res: Response) => {
 
 app.put("/api/vault/state", requireAuth, syncHandler);
 app.post("/api/vault/sync", requireAuth, syncHandler);
+
+// 8. POST /api/vault/worker/auth-params
+app.post("/api/vault/worker/auth-params", async (req: Request, res: Response) => {
+  try {
+    const { workerId } = req.body;
+    if (!workerId) {
+      return res.status(400).json({ error: "Invalid Request", message: "workerId is required." });
+    }
+    const workerIdHex = Buffer.from(workerId).toString('hex');
+    const indexFilePath = `data/workers_index/${workerIdHex}.json`;
+    try {
+      const { content } = await githubStorageGet(indexFilePath);
+      if (content) {
+        const record = JSON.parse(content);
+        if (record.isWorkerLoginEnabled) {
+          return res.json({
+            exists: true,
+            isWorkerLoginEnabled: true,
+            workerSaltHex: record.workerSaltHex,
+          });
+        }
+      }
+    } catch {}
+    return res.json({ exists: false, isWorkerLoginEnabled: false });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Server Error", message: err.message });
+  }
+});
+
+// 9. POST /api/vault/worker/login
+app.post("/api/vault/worker/login", async (req: Request, res: Response) => {
+  try {
+    const { workerId, passwordHash, passwordProof } = req.body;
+    if (!workerId || (!passwordHash && !passwordProof)) {
+      return res.status(400).json({ error: "Invalid Request", message: "workerId and passwordHash/passwordProof are required." });
+    }
+    const workerIdHex = Buffer.from(workerId).toString('hex');
+    const indexFilePath = `data/workers_index/${workerIdHex}.json`;
+
+    let record: any = null;
+    try {
+      const { content } = await githubStorageGet(indexFilePath);
+      if (content) {
+        record = JSON.parse(content);
+      }
+    } catch {
+      return res.status(401).json({ error: "Authentication Failed", message: "Invalid worker credentials." });
+    }
+
+    if (!record || !record.isWorkerLoginEnabled || !record.workerPasswordHash) {
+      return res.status(401).json({ error: "Authentication Failed", message: "Worker not found or login disabled." });
+    }
+
+    const submittedProof = passwordHash || passwordProof;
+    const expectedBuf = Buffer.from(record.workerPasswordHash, 'hex');
+    const submittedBuf = Buffer.from(submittedProof, 'hex');
+
+    if (expectedBuf.length !== submittedBuf.length || !crypto.timingSafeEqual(expectedBuf, submittedBuf)) {
+      return res.status(401).json({ error: "Authentication Failed", message: "Invalid password." });
+    }
+
+    return res.json({
+      success: true,
+      authenticatedWorkerId: record.workerId,
+      opaqueUserId: record.ownerOpaqueUserId,
+      appId: "shramik_hisab",
+    });
+  } catch (err: any) {
+    return res.status(401).json({ error: "Authentication Failed", message: err.message || "Worker login failed." });
+  }
+});
 
 // ============================================================================
 // DATABASE SERVICE API LAYER FOR EXTERNAL APPLICATIONS (MULTI-PROJECT DB SERVICE)

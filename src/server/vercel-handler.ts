@@ -22,6 +22,7 @@ const VAULT_SUBROUTES = new Set([
   "store",
   "retrieve",
   "delete",
+  "worker",
 ]);
 
 /**

@@ -61,7 +61,7 @@ export class GitHubStorageClient {
   }
 
   // Put / Sync application vault state to Server Vault Proxy
-  public async syncState(appId: string, stateObject: any): Promise<{ sha: string; syncedAt: string }> {
+  public async syncState(appId: string, stateObject: any, workerAuthEntries?: any[]): Promise<{ sha: string; syncedAt: string }> {
     if (this.config.mode === "MOCK") {
       const entry = await GitHubMockRemote.putFile(
         `vault/${appId}/state.json`,
@@ -85,6 +85,7 @@ export class GitHubStorageClient {
       body: JSON.stringify({
         appId,
         stateObject,
+        workerAuthEntries,
       }),
     });
 
@@ -100,6 +101,33 @@ export class GitHubStorageClient {
 
     const data = await res.json();
     return { sha: data.sha, syncedAt: data.syncedAt };
+  }
+
+  public async getWorkerAuthParams(workerId: string): Promise<{ exists: boolean; isWorkerLoginEnabled: boolean; workerSaltHex?: string }> {
+    try {
+      const res = await fetch(getApiUrl(`/api/vault/worker/auth-params`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workerId }),
+      });
+      if (!res.ok) return { exists: false, isWorkerLoginEnabled: false };
+      return await res.json();
+    } catch {
+      return { exists: false, isWorkerLoginEnabled: false };
+    }
+  }
+
+  public async workerLogin(workerId: string, passwordHash: string): Promise<{ success: boolean; authenticatedWorkerId: string; opaqueUserId: string; appId: string }> {
+    const res = await fetch(getApiUrl(`/api/vault/worker/login`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workerId, passwordHash }),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.message || "Worker login failed.");
+    }
+    return await res.json();
   }
 
   // Legacy getFile fallback compatibility

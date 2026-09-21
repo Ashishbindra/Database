@@ -201,4 +201,20 @@ export class CentralDataClient {
     if (!this.authManager.isLoggedIn()) return;
     await this.authManager.deleteAccount();
   }
+
+  // --- WORKER AUTHENTICATION ---
+
+  public async getWorkerAuthParams(workerId: string) {
+    return await this.githubClient.getWorkerAuthParams(workerId);
+  }
+
+  public async workerLogin(workerId: string, password: string) {
+    const authParams = await this.getWorkerAuthParams(workerId);
+    if (!authParams.exists || !authParams.isWorkerLoginEnabled || !authParams.workerSaltHex) {
+      throw new Error("Worker login is not enabled for this ID.");
+    }
+    const saltHex = authParams.workerSaltHex;
+    const passwordHash = await CryptoManager.deriveAuthProofHash(password, saltHex);
+    return await this.githubClient.workerLogin(workerId, passwordHash);
+  }
 }

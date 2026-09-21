@@ -65,7 +65,7 @@ export default function App() {
 
         {activeView === "database" && <DeveloperDatabaseDashboard sdk={sdk} />}
 
-        {activeView === "shramik" && <ShramikHisabApp sdk={sdk} />}
+        {activeView === "shramik" && <ShramikHisabApp sdk={sdk} onAuthStateChanged={triggerRefresh} />}
 
         {activeView === "resume" && <ResumeCraftApp sdk={sdk} />}
 

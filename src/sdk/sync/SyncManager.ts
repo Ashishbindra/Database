@@ -124,12 +124,31 @@ export class SyncManager {
       Date.now() // Data version
     );
 
-    // 7. Push Encrypted Envelope to GitHub Storage
-    await this.githubClient.putFile(
-      remotePath,
-      JSON.stringify(encryptedEnvelope, null, 2),
-      `Sync app state for ${appId} (User ${userId})`
-    );
+    // 7. Push Encrypted Envelope to Server Vault Sync API with workerAuthEntries
+    let workerAuthEntries: any[] | undefined = undefined;
+    if (appId === "shramik_hisab") {
+      workerAuthEntries = [];
+      for (const rec of mergedMap.values()) {
+        if (rec.entity === "workers" && !rec.isDeleted && rec.data) {
+          const w = rec.data as any;
+          if (w.isWorkerLoginEnabled && w.workerPasswordHash && w.workerSaltHex) {
+            workerAuthEntries.push({
+              workerId: w.id || w.workerId,
+              isWorkerLoginEnabled: true,
+              workerPasswordHash: w.workerPasswordHash,
+              workerSaltHex: w.workerSaltHex,
+            });
+          } else if (w.id) {
+            workerAuthEntries.push({
+              workerId: w.id,
+              isWorkerLoginEnabled: false,
+            });
+          }
+        }
+      }
+    }
+
+    await this.githubClient.syncState(appId, encryptedEnvelope, workerAuthEntries);
 
     return { pushedCount, pulledCount, conflictsResolved };
   }
