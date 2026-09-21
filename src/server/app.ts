@@ -1371,6 +1371,61 @@ app.post("/api/vault/worker/login", async (req: Request, res: Response) => {
   }
 });
 
+// 10. POST /api/vault/worker/state
+app.post("/api/vault/worker/state", async (req: Request, res: Response) => {
+  try {
+    const { workerId, passwordHash, passwordProof, appId = "shramik_hisab" } = req.body;
+    if (!workerId || (!passwordHash && !passwordProof)) {
+      return res.status(400).json({ error: "Invalid Request", message: "workerId and passwordHash/passwordProof are required." });
+    }
+    const workerIdHex = Buffer.from(workerId).toString('hex');
+    const indexFilePath = `data/workers_index/${workerIdHex}.json`;
+
+    let record: any = null;
+    try {
+      const { content } = await githubStorageGet(indexFilePath);
+      if (content) {
+        record = JSON.parse(content);
+      }
+    } catch {
+      return res.status(401).json({ error: "Authentication Failed", message: "Invalid worker credentials." });
+    }
+
+    if (!record || !record.isWorkerLoginEnabled || !record.workerPasswordHash) {
+      return res.status(401).json({ error: "Authentication Failed", message: "Worker not found or login disabled." });
+    }
+
+    const submittedProof = passwordHash || passwordProof;
+    const expectedBuf = Buffer.from(record.workerPasswordHash, 'hex');
+    const submittedBuf = Buffer.from(submittedProof, 'hex');
+
+    if (expectedBuf.length !== submittedBuf.length || !crypto.timingSafeEqual(expectedBuf, submittedBuf)) {
+      return res.status(401).json({ error: "Authentication Failed", message: "Invalid password." });
+    }
+
+    const opaqueUserId = record.ownerOpaqueUserId;
+    const stateFilePath = `data/users/${opaqueUserId}/vault/${appId}/state.json`;
+
+    try {
+      const { content, sha } = await githubStorageGet(stateFilePath);
+      const parsedState = JSON.parse(content);
+      return res.json({
+        exists: true,
+        sha,
+        state: parsedState,
+        opaqueUserId,
+      });
+    } catch (err: any) {
+      if (err.status === 404 || err.statusCode === 404) {
+        return res.json({ exists: false, state: null, opaqueUserId });
+      }
+      return res.status(500).json({ error: "Server Error", message: err.message || "Failed to fetch state." });
+    }
+  } catch (err: any) {
+    return res.status(500).json({ error: "Server Error", message: err.message || "Worker state fetch failed." });
+  }
+});
+
 // ============================================================================
 // DATABASE SERVICE API LAYER FOR EXTERNAL APPLICATIONS (MULTI-PROJECT DB SERVICE)
 // ============================================================================

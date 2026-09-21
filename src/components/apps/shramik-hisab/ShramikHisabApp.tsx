@@ -120,6 +120,7 @@ export const ShramikHisabApp: React.FC<{
   const [workerLoginId, setWorkerLoginId] = useState("");
   const [workerLoginPassword, setWorkerLoginPassword] = useState("");
   const [workerSession, setWorkerSession] = useState<any>(null);
+  const [workerState, setWorkerState] = useState<any>(null);
   const [newWorkerLoginEnabled, setNewWorkerLoginEnabled] = useState(false);
   const [newWorkerPassword, setNewWorkerPassword] = useState("");
 
@@ -127,9 +128,10 @@ export const ShramikHisabApp: React.FC<{
     e.preventDefault();
     setAuthError("");
     try {
-      const session = await sdk.workerLogin(workerLoginId.trim(), workerLoginPassword);
-      setWorkerSession(session);
-      setAuthSuccess(`Logged in successfully as worker ${session.authenticatedWorkerId}`);
+      const result = await sdk.workerLoginAndGetState(workerLoginId.trim(), workerLoginPassword, "shramik_hisab");
+      setWorkerSession(result.session);
+      setWorkerState(result.state);
+      setAuthSuccess(`Logged in successfully as worker ${result.session.authenticatedWorkerId}`);
     } catch (err: any) {
       setAuthError(`Worker Login Failed: ${err.message}`);
     }
@@ -699,29 +701,78 @@ export const ShramikHisabApp: React.FC<{
         )}
 
         {/* WORKER SESSION SUCCESS VIEW */}
-        {authMode === "WORKER" && workerSession && (
-          <div className="p-5 bg-stone-900 border border-amber-500/30 rounded-xl space-y-4 text-center">
-            <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto">
-              <CheckCircle2 className="w-6 h-6" />
+        {authMode === "WORKER" && workerSession && (() => {
+          const portalRecords = (() => {
+            if (!workerState || !workerState.records) return { worker: null, attendance: [], payments: [] };
+            let foundWorker = null;
+            const workerAttendance: any[] = [];
+            const workerPayments: any[] = [];
+            Object.values(workerState.records).forEach((rec: any) => {
+              const data = rec.data || rec;
+              const id = data.id || rec.id;
+              if (rec.entity === "workers" && (id === workerSession?.authenticatedWorkerId || data.workerId === workerSession?.authenticatedWorkerId)) {
+                foundWorker = data;
+              }
+              if (rec.entity === "attendance" && (data.workerId === workerSession?.authenticatedWorkerId)) {
+                workerAttendance.push(data);
+              }
+              if (rec.entity === "payments" && (data.workerId === workerSession?.authenticatedWorkerId)) {
+                workerPayments.push(data);
+              }
+            });
+            return { worker: foundWorker, attendance: workerAttendance, payments: workerPayments };
+          })();
+
+          return (
+            <div className="p-5 bg-stone-900 border border-amber-500/30 rounded-xl space-y-4 text-left">
+              <div className="flex items-center justify-between border-b border-stone-800 pb-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center">
+                    <CheckCircle2 className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-stone-100">Worker Portal Active</h3>
+                    <p className="text-[11px] text-stone-400 font-mono">ID: {workerSession.authenticatedWorkerId}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setWorkerSession(null)}
+                  className="px-3 py-1.5 bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-medium rounded-lg transition"
+                >
+                  Log Out
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="p-3 bg-stone-950 rounded-lg border border-stone-800">
+                  <span className="text-stone-400 block text-[10px]">Worker Name</span>
+                  <span className="font-semibold text-stone-200">{(portalRecords.worker as any)?.name || workerSession.authenticatedWorkerId}</span>
+                </div>
+                <div className="p-3 bg-stone-950 rounded-lg border border-stone-800">
+                  <span className="text-stone-400 block text-[10px]">Daily Wage</span>
+                  <span className="font-semibold text-amber-400">₹{(portalRecords.worker as any)?.dailyWage || 0}</span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <h4 className="text-xs font-semibold text-stone-300">Restored Contractor State Records:</h4>
+                <div className="p-3 bg-stone-950 rounded-lg border border-stone-800 space-y-2 text-xs">
+                  <div className="flex justify-between text-stone-400">
+                    <span>Attendance Logs Found:</span>
+                    <span className="font-mono text-stone-200">{portalRecords.attendance.length}</span>
+                  </div>
+                  <div className="flex justify-between text-stone-400">
+                    <span>Payments / Advances Found:</span>
+                    <span className="font-mono text-stone-200">{portalRecords.payments.length}</span>
+                  </div>
+                  <div className="text-[10px] text-emerald-400 pt-1 border-t border-stone-800/80">
+                    Successfully authenticated and restored state via Device-B Global Worker API (Owner Opaque ID: {workerSession.opaqueUserId})
+                  </div>
+                </div>
+              </div>
             </div>
-            <h3 className="text-base font-bold text-stone-100">Worker Portal Active</h3>
-            <p className="text-xs text-stone-400">
-              Authenticated Worker ID: <span className="font-mono text-amber-400">{workerSession.authenticatedWorkerId}</span>
-            </p>
-            <p className="text-xs text-stone-400">
-              Owner Opaque User ID: <span className="font-mono text-stone-300">{workerSession.opaqueUserId}</span>
-            </p>
-            <div className="p-3 bg-stone-950 rounded-lg border border-stone-800 text-xs text-stone-300">
-              Global Worker Authentication verified successfully via Vault API without owner session.
-            </div>
-            <button
-              onClick={() => setWorkerSession(null)}
-              className="px-4 py-2 bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-medium rounded-lg transition"
-            >
-              Log Out Worker Session
-            </button>
-          </div>
-        )}
+          );
+        })()}
 
         {/* One-Click Quick User Preset Switcher */}
         <div className="mt-8 pt-6 border-t border-stone-800/80">

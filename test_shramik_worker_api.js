@@ -123,6 +123,29 @@ async function runApiVerification() {
     throw new Error("Worker login authentication failed");
   }
 
+  // 5. Test POST /api/vault/worker/state (Device-B state fetching)
+  console.log("Testing POST /api/vault/worker/state for SHR-000001...");
+  const stateRes = await fetch(`${baseUrl}/api/vault/worker/state`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      workerId: "SHR-000001",
+      passwordHash: loginProofHash,
+      appId: "shramik_hisab"
+    })
+  });
+  const stateData = await stateRes.json();
+  console.log("POST /api/vault/worker/state Response:", {
+    status: stateRes.status,
+    exists: stateData.exists,
+    opaqueUserId: stateData.opaqueUserId,
+    recordsCount: stateData.state?.records ? Object.keys(stateData.state.records).length : 0
+  });
+
+  if (!stateRes.ok || !stateData.exists) {
+    throw new Error("Worker state fetch failed");
+  }
+
   console.log("=== ALL SHR-000001 WORKER VERIFICATION TESTS PASSED SUCCESSFULLY ===");
 }
 

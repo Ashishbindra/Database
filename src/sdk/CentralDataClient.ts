@@ -217,4 +217,26 @@ export class CentralDataClient {
     const passwordHash = await CryptoManager.deriveAuthProofHash(password, saltHex);
     return await this.githubClient.workerLogin(workerId, passwordHash);
   }
+
+  public async workerLoginAndGetState(workerId: string, password: string, appId: string = "shramik_hisab") {
+    const authParams = await this.getWorkerAuthParams(workerId);
+    if (!authParams.exists || !authParams.isWorkerLoginEnabled || !authParams.workerSaltHex) {
+      throw new Error("Worker login is not enabled for this ID.");
+    }
+    const saltHex = authParams.workerSaltHex;
+    const passwordHash = await CryptoManager.deriveAuthProofHash(password, saltHex);
+
+    const loginResult = await this.githubClient.workerLogin(workerId, passwordHash);
+    if (!loginResult.success) {
+      throw new Error("Worker authentication failed.");
+    }
+
+    const stateResult = await (this.githubClient as any).workerGetState(workerId, passwordHash, appId);
+
+    return {
+      session: loginResult,
+      state: stateResult.state || null,
+      opaqueUserId: loginResult.opaqueUserId
+    };
+  }
 }

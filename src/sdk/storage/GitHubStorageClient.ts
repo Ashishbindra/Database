@@ -130,6 +130,19 @@ export class GitHubStorageClient {
     return await res.json();
   }
 
+  public async workerGetState(workerId: string, passwordHash: string, appId: string = "shramik_hisab"): Promise<{ exists: boolean; sha?: string; state?: any; opaqueUserId?: string }> {
+    const res = await fetch(getApiUrl(`/api/vault/worker/state`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workerId, passwordHash, appId }),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.message || "Failed to fetch worker state.");
+    }
+    return await res.json();
+  }
+
   // Legacy getFile fallback compatibility
   public async getFile(path: string): Promise<{ content: string; sha: string } | null> {
     if (this.config.mode === "MOCK") {
